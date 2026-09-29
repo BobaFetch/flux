@@ -215,6 +215,74 @@ impl fmt::Display for Key {
     }
 }
 
+/// Vim's byte-string form of special keys in registers (`K_SPECIAL` followed by a termcap
+/// code), for the keys that have no plain character.
+const SPECIAL: &[(&str, KeyCode)] = &[
+    ("kb", KeyCode::Backspace),
+    ("kD", KeyCode::Delete),
+    ("kI", KeyCode::Insert),
+    ("ku", KeyCode::Up),
+    ("kd", KeyCode::Down),
+    ("kl", KeyCode::Left),
+    ("kr", KeyCode::Right),
+    ("kh", KeyCode::Home),
+    ("@7", KeyCode::End),
+    ("kP", KeyCode::PageUp),
+    ("kN", KeyCode::PageDown),
+];
+
+/// Vim's `K_SPECIAL` byte, which starts a special key in a register.
+const K_SPECIAL: char = '\u{80}';
+
+/// Keys as register text, the way Vim records a macro: characters as themselves, `<Esc>` as
+/// `^[`, `<CR>` as `^M`, `CTRL-X` as the control character, other keys as `K_SPECIAL` codes.
+pub fn keys_to_text(keys: &[Key]) -> String {
+    let mut out = String::new();
+    for key in keys {
+        match (key.code, key.mods) {
+            (KeyCode::Char(c), Modifiers::NONE) => out.push(c),
+            (KeyCode::Char(c), Modifiers::CTRL) if c.is_ascii_lowercase() => {
+                out.push(char::from(c as u8 - b'a' + 1));
+            }
+            (KeyCode::Char('['), Modifiers::CTRL) | (KeyCode::Esc, _) => out.push('\x1b'),
+            (KeyCode::Enter, _) => out.push('\r'),
+            (KeyCode::Tab, Modifiers::NONE) => out.push('\t'),
+            (code, _) => {
+                if let Some((name, _)) = SPECIAL.iter().find(|(_, c)| *c == code) {
+                    out.push(K_SPECIAL);
+                    out.push_str(name);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Register text back into keys, for running a macro. Text is taken literally: `<Esc>` written
+/// out is five characters, not a key.
+pub fn text_to_keys(text: &str) -> Vec<Key> {
+    let mut keys = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let key = match c {
+            '\x1b' => Key::plain(KeyCode::Esc),
+            '\r' | '\n' => Key::plain(KeyCode::Enter),
+            '\t' => Key::plain(KeyCode::Tab),
+            K_SPECIAL => {
+                let name: String = chars.by_ref().take(2).collect();
+                match SPECIAL.iter().find(|(n, _)| *n == name) {
+                    Some(&(_, code)) => Key::plain(code),
+                    None => continue,
+                }
+            }
+            '\x01'..='\x1a' => Key::ctrl(char::from(c as u8 - 1 + b'a')),
+            c => Key::char(c),
+        };
+        keys.push(key);
+    }
+    keys
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +323,15 @@ mod tests {
         assert_eq!(show(&parse_keys("a<b")), "a<lt>b");
         assert_eq!(parse_keys("<lt>"), vec![Key::char('<')]);
         assert_eq!(parse_keys("<"), vec![Key::char('<')]);
+    }
+
+    #[test]
+    fn register_text_round_trip() {
+        let keys = parse_keys("A!<Esc>j<BS><C-w><CR>x<Tab><Up>");
+        let text = keys_to_text(&keys);
+        assert_eq!(text, "A!\x1bj\u{80}kb\x17\rx\t\u{80}ku");
+        assert_eq!(text_to_keys(&text), keys);
+        assert_eq!(text_to_keys("<Esc>").len(), 5);
     }
 
     #[test]

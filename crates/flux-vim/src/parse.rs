@@ -6,6 +6,7 @@
 
 use crate::key::{Key, KeyCode, Modifiers};
 use crate::motion::{Find, Motion};
+use crate::textobj::TextObject;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operator {
@@ -31,6 +32,7 @@ pub enum OpTarget {
     Motion(Motion),
     /// The operator repeated (`dd`, `>>`, `gUU`): `count` whole lines.
     Lines,
+    Object(TextObject),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +92,24 @@ pub enum Action {
     QuitDiscard,
     /// `CTRL-L`: handled by the frontend; nothing to do here.
     Redraw,
+    /// `m{a-zA-Z…}`
+    SetMark(char),
+    /// `q{reg}`: start recording a macro.
+    Record(char),
+    /// `q` while recording.
+    StopRecord,
+    /// `@{reg}`; `@@` is the last one run, `@:` the last command line.
+    Execute(char),
+    /// `CTRL-O` (`true`) and `CTRL-I`/`<Tab>`.
+    Jump {
+        older: bool,
+    },
+    /// `v`, `V`.
+    Visual(flux_view::VisualKind),
+    /// `gv`
+    Reselect,
+    /// `gi`
+    InsertAtLastInsert,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,13 +172,15 @@ impl Keys<'_> {
     }
 }
 
-pub fn parse(keys: &[Key]) -> Parse {
+/// Parse a Normal-mode command. `recording` says whether a macro is being recorded, which makes
+/// `q` alone stop it.
+pub fn parse(keys: &[Key], recording: bool) -> Parse {
     let mut k = Keys {
         keys,
         i: 0,
         recorded: Vec::new(),
     };
-    match parse_command(&mut k) {
+    match parse_command(&mut k, recording) {
         Err(NeedMore) => Parse::Incomplete,
         Ok(None) => Parse::Invalid,
         Ok(Some((register, count, action))) => Parse::Done(Command {
@@ -172,7 +194,7 @@ pub fn parse(keys: &[Key]) -> Parse {
 
 type Parsed = Option<(Option<char>, Option<usize>, Action)>;
 
-fn parse_command(k: &mut Keys) -> Result<Parsed, NeedMore> {
+fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
     let mut register = None;
     let mut count: Option<usize> = None;
     // `"x` and a count, in either order (`"a3yy`, `3"ayy`).
@@ -244,6 +266,25 @@ fn parse_command(k: &mut Keys) -> Result<Parsed, NeedMore> {
             'u' => Some(Action::Undo),
             '.' => Some(Action::Repeat),
             ':' => Some(Action::CmdLine),
+            'v' => Some(Action::Visual(flux_view::VisualKind::Char)),
+            'V' => Some(Action::Visual(flux_view::VisualKind::Line)),
+            'm' => match k.next()?.typed_char() {
+                Some(c) if c.is_ascii_alphabetic() || "'`[]<>".contains(c) => {
+                    Some(Action::SetMark(c))
+                }
+                _ => None,
+            },
+            'q' if recording => Some(Action::StopRecord),
+            'q' => match k.next()?.typed_char() {
+                Some(c) if c.is_ascii_alphanumeric() || c == '"' => Some(Action::Record(c)),
+                _ => None,
+            },
+            '@' => match k.next()?.typed_char() {
+                Some(c) if c.is_ascii_alphanumeric() || "@:\"-".contains(c) => {
+                    Some(Action::Execute(c))
+                }
+                _ => None,
+            },
             'Z' => match k.next()?.typed_char() {
                 Some('Z') => Some(Action::WriteQuit),
                 Some('Q') => Some(Action::QuitDiscard),
@@ -255,6 +296,8 @@ fn parse_command(k: &mut Keys) -> Result<Parsed, NeedMore> {
                 Some('U') => operator(k, Operator::Uppercase, 'U', &mut count)?,
                 Some('J') => Some(Action::Join { spaces: false }),
                 Some('I') => Some(Action::Insert(InsertAt::LineStart)),
+                Some('v') => Some(Action::Reselect),
+                Some('i') => Some(Action::InsertAtLastInsert),
                 Some(c) => g_motion(c).map(Action::Move),
                 None => None,
             },
@@ -277,10 +320,14 @@ fn control_key(key: Key) -> Option<Action> {
             KeyCode::Char('b') => Some(Action::Scroll(Scroll::PageUp)),
             KeyCode::Char('g') => Some(Action::FileInfo),
             KeyCode::Char('l') => Some(Action::Redraw),
+            KeyCode::Char('o') => Some(Action::Jump { older: true }),
+            KeyCode::Char('i') => Some(Action::Jump { older: false }),
             _ => None,
         };
     }
     match key.code {
+        // Terminals send CTRL-I as <Tab>.
+        KeyCode::Tab if key.mods == Modifiers::NONE => Some(Action::Jump { older: false }),
         KeyCode::PageDown if key.mods == Modifiers::NONE => Some(Action::Scroll(Scroll::PageDown)),
         KeyCode::PageUp if key.mods == Modifiers::NONE => Some(Action::Scroll(Scroll::PageUp)),
         _ => None,
@@ -313,6 +360,13 @@ fn operator(
         return Ok(next
             .and_then(g_motion)
             .map(|m| Action::Operate(op, OpTarget::Motion(m))));
+    }
+    if let Some(c @ ('i' | 'a')) = key.typed_char() {
+        let obj = k
+            .next()?
+            .typed_char()
+            .and_then(|o| TextObject::from_char(o, c == 'a'));
+        return Ok(obj.map(|o| Action::Operate(op, OpTarget::Object(o))));
     }
     Ok(motion(k, key)?.map(|m| Action::Operate(op, OpTarget::Motion(m))))
 }
@@ -358,6 +412,14 @@ fn motion(k: &mut Keys, key: Key) -> Result<Option<Motion>, NeedMore> {
             'H' => Some(Motion::WindowTop),
             'M' => Some(Motion::WindowMiddle),
             'L' => Some(Motion::WindowBottom),
+            '\'' | '`' => {
+                let name = k.next()?.typed_char();
+                name.filter(|&n| n.is_ascii_alphabetic() || "'`[]<>.^\"".contains(n))
+                    .map(|name| Motion::Mark {
+                        name,
+                        exact: c == '`',
+                    })
+            }
             'f' | 'F' | 't' | 'T' => {
                 let target = k.next()?;
                 let ch = match target.code {
@@ -396,13 +458,156 @@ fn motion(k: &mut Keys, key: Key) -> Result<Option<Motion>, NeedMore> {
     })
 }
 
+/// A command typed in Visual mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualAction {
+    Move(Motion),
+    Object(TextObject),
+    /// An operator on the selection (`d`, `c`, `y`, `>`, `~`, `u`, …).
+    Operate(Operator),
+    /// An operator on the selected lines, whatever the selection kind (`D`, `X`, `C`, `S`, `R`,
+    /// `Y`).
+    OperateLines(Operator),
+    Join {
+        spaces: bool,
+    },
+    Replace(char),
+    Put {
+        before: bool,
+    },
+    /// `o`, `O`
+    SwapEnds,
+    /// `gv`
+    Reselect,
+    /// `v`, `V`: switch kind, or leave when it's the current one.
+    Switch(flux_view::VisualKind),
+    /// `<Esc>`, `CTRL-C`
+    Exit,
+    CmdLine,
+    Scroll(Scroll),
+    SetMark(char),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualCommand {
+    pub register: Option<char>,
+    pub count: Option<usize>,
+    pub action: VisualAction,
+    /// The keys without the count, for `.` on a Visual operator.
+    pub keys: Vec<Key>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisualParse {
+    Incomplete,
+    Invalid,
+    Done(VisualCommand),
+}
+
+pub fn parse_visual(keys: &[Key]) -> VisualParse {
+    let mut k = Keys {
+        keys,
+        i: 0,
+        recorded: Vec::new(),
+    };
+    match parse_visual_command(&mut k) {
+        Err(NeedMore) => VisualParse::Incomplete,
+        Ok(None) => VisualParse::Invalid,
+        Ok(Some((register, count, action))) => VisualParse::Done(VisualCommand {
+            register,
+            count,
+            action,
+            keys: k.recorded,
+        }),
+    }
+}
+
+type ParsedVisual = Option<(Option<char>, Option<usize>, VisualAction)>;
+
+fn parse_visual_command(k: &mut Keys) -> Result<ParsedVisual, NeedMore> {
+    use VisualAction as V;
+    let mut register = None;
+    let mut count = None;
+    loop {
+        if let Some(c) = k.count() {
+            count = Some(c);
+            continue;
+        }
+        if k.peek() == Some(Key::char('"')) {
+            k.next()?;
+            match k.next()?.typed_char() {
+                Some(c) if flux_view::registers::is_valid_name(c) => register = Some(c),
+                _ => return Ok(None),
+            }
+            continue;
+        }
+        break;
+    }
+    let key = k.next()?;
+    if key == Key::plain(KeyCode::Esc) || key == Key::ctrl('c') {
+        return Ok(Some((register, count, V::Exit)));
+    }
+    let action = match key.typed_char() {
+        Some(c) => match c {
+            'd' | 'x' => Some(V::Operate(Operator::Delete)),
+            'c' | 's' => Some(V::Operate(Operator::Change)),
+            'y' => Some(V::Operate(Operator::Yank)),
+            '>' => Some(V::Operate(Operator::ShiftRight)),
+            '<' => Some(V::Operate(Operator::ShiftLeft)),
+            '~' => Some(V::Operate(Operator::ToggleCase)),
+            'u' => Some(V::Operate(Operator::Lowercase)),
+            'U' => Some(V::Operate(Operator::Uppercase)),
+            'D' | 'X' => Some(V::OperateLines(Operator::Delete)),
+            'C' | 'S' | 'R' => Some(V::OperateLines(Operator::Change)),
+            'Y' => Some(V::OperateLines(Operator::Yank)),
+            'J' => Some(V::Join { spaces: true }),
+            'p' => Some(V::Put { before: false }),
+            'P' => Some(V::Put { before: true }),
+            'o' | 'O' => Some(V::SwapEnds),
+            'v' => Some(V::Switch(flux_view::VisualKind::Char)),
+            'V' => Some(V::Switch(flux_view::VisualKind::Line)),
+            ':' => Some(V::CmdLine),
+            'r' => match k.next()? {
+                key if key == Key::plain(KeyCode::Enter) => Some(V::Replace('\n')),
+                key => key.typed_char().map(V::Replace),
+            },
+            'm' => k
+                .next()?
+                .typed_char()
+                .filter(|c| c.is_ascii_alphabetic())
+                .map(V::SetMark),
+            'i' | 'a' => k
+                .next()?
+                .typed_char()
+                .and_then(|o| TextObject::from_char(o, c == 'a'))
+                .map(V::Object),
+            'g' => match k.next()?.typed_char() {
+                Some('v') => Some(V::Reselect),
+                Some('J') => Some(V::Join { spaces: false }),
+                Some('~') => Some(V::Operate(Operator::ToggleCase)),
+                Some('u') => Some(V::Operate(Operator::Lowercase)),
+                Some('U') => Some(V::Operate(Operator::Uppercase)),
+                Some(c) => g_motion(c).map(V::Move),
+                None => None,
+            },
+            _ => motion(k, key)?.map(V::Move),
+        },
+        None => match control_key(key) {
+            Some(Action::Scroll(s)) => Some(V::Scroll(s)),
+            _ if key == Key::plain(KeyCode::Delete) => Some(V::Operate(Operator::Delete)),
+            _ => motion(k, key)?.map(V::Move),
+        },
+    };
+    Ok(action.map(|a| (register, count, a)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parse_keys;
 
     fn done(keys: &str) -> Command {
-        match parse(&parse_keys(keys)) {
+        match parse(&parse_keys(keys), false) {
             Parse::Done(c) => c,
             other => panic!("{keys}: {other:?}"),
         }
@@ -446,10 +651,10 @@ mod tests {
     #[test]
     fn incomplete_and_invalid() {
         for keys in ["", "d", "2d3", "\"", "g", "f", "dt", "gu", "gug", "Z", "r"] {
-            assert_eq!(parse(&parse_keys(keys)), Parse::Incomplete, "{keys}");
+            assert_eq!(parse(&parse_keys(keys), false), Parse::Incomplete, "{keys}");
         }
-        for keys in ["dz", "Q", "d<Esc>", "f<Esc>", "\"%", "gq", "<Esc>"] {
-            assert_eq!(parse(&parse_keys(keys)), Parse::Invalid, "{keys}");
+        for keys in ["dz", "Q", "d<Esc>", "f<Esc>", "\"=", "gq", "<Esc>", "dis"] {
+            assert_eq!(parse(&parse_keys(keys), false), Parse::Invalid, "{keys}");
         }
     }
 

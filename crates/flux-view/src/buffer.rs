@@ -41,6 +41,10 @@ pub struct Buffer {
     /// The file wasn't valid UTF-8 and was loaded with replacement characters. Writing it back
     /// would corrupt it.
     pub invalid_utf8: bool,
+    pub marks: crate::Marks,
+    /// The last Visual selection, for `gv`: anchor, cursor, kind and whether it went to the end
+    /// of lines (`$`).
+    pub last_visual: Option<(crate::Cursor, crate::Cursor, crate::VisualKind, bool)>,
     disk: Option<DiskState>,
 }
 
@@ -54,6 +58,8 @@ impl Buffer {
             new_file: false,
             uncommitted: false,
             invalid_utf8: false,
+            marks: Default::default(),
+            last_visual: None,
             disk: None,
         }
     }

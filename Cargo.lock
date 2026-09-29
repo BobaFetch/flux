@@ -127,6 +127,7 @@ dependencies = [
  "crossterm",
  "flux-core",
  "flux-view",
+ "flux-vim",
  "unicode-segmentation",
  "unicode-width",
 ]
@@ -146,6 +147,7 @@ dependencies = [
  "flux-core",
  "flux-view",
  "serde_json",
+ "unicode-width",
 ]
 
 [[package]]

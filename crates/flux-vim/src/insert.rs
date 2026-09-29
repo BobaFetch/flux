@@ -29,6 +29,8 @@ pub(crate) struct Insert {
     ai_line: Option<usize>,
     /// Keys typed, to repeat them for a count.
     typed: Vec<Key>,
+    /// The text inserted, for the `".` register.
+    inserted: String,
     /// The next key is literal (`CTRL-V`) or names a register to insert (`CTRL-R`).
     prefix: Option<char>,
     repeating: bool,
@@ -42,6 +44,7 @@ impl Insert {
             start,
             ai_line,
             typed: Vec::new(),
+            inserted: String::new(),
             prefix: None,
             repeating: false,
         }
@@ -84,7 +87,7 @@ impl Engine {
                 }
                 _ => {
                     if let Some(name) = key.typed_char()
-                        && let Some(reg) = editor.registers.get(Some(name)).cloned()
+                        && let Some(reg) = editor.register(Some(name))
                     {
                         let mut text = reg.text;
                         if reg.kind == RegisterKind::Line {
@@ -149,6 +152,7 @@ impl Engine {
         if ins.ai_line == Some(cur.line) {
             ins.ai_line = None;
         }
+        ins.inserted.push_str(text);
         set_want(editor, Want::Column);
     }
 
@@ -187,6 +191,7 @@ impl Engine {
         editor.window.cursor = pos(cur.line + 1, indent.chars().count());
         if let Some(ins) = self.insert.as_mut() {
             ins.ai_line = (!indent.is_empty()).then_some(cur.line + 1);
+            ins.inserted.push('\n');
         }
         set_want(editor, Want::Column);
     }
@@ -195,6 +200,7 @@ impl Engine {
     /// previous one ('backspace' has `eol`). In the indent with 'smarttab', go back to the
     /// previous 'shiftwidth' stop.
     fn backspace(&mut self, editor: &mut Editor) {
+        self.state().inserted.pop();
         let cur = editor.cursor();
         if cur.col == 0 {
             self.join_previous(editor);
@@ -428,6 +434,7 @@ impl Engine {
         self.recording = Some(Dot {
             keys: vec![Key::char('i')],
             count: None,
+            visual: None,
         });
     }
 
@@ -473,9 +480,14 @@ impl Engine {
         }
         self.commit(editor);
         if let Some(dot) = self.recording.take() {
-            self.set_dot(dot.keys, dot.count);
+            self.set_dot(dot);
+        }
+        // The `".` register holds what was typed, and `'^` where Insert mode ended.
+        if ins.kind != InsertKind::Replace {
+            editor.registers.set_readonly('.', ins.inserted.clone());
         }
         let cur = editor.cursor();
+        editor.current_buffer_mut().marks.set('^', cur);
         if cur.col > 0 {
             let s = util::line(editor, cur.line);
             editor.window.cursor.col = chars::prev_grapheme(&s, cur.col);

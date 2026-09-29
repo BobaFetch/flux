@@ -8,7 +8,9 @@ pub mod key;
 pub mod motion;
 mod normal;
 pub mod parse;
+pub mod textobj;
 mod util;
+mod visual;
 
 pub use engine::Engine;
-pub use key::{Key, KeyCode, Modifiers, parse_keys};
+pub use key::{Key, KeyCode, Modifiers, keys_to_text, parse_keys, text_to_keys};

@@ -43,7 +43,7 @@ impl Default for Registers {
 
 /// Registers a command can name after `"`.
 pub fn is_valid_name(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '"' | '-' | '_' | '+' | '*' | '.' | ':' | '/')
+    c.is_ascii_alphanumeric() || matches!(c, '"' | '-' | '_' | '+' | '*' | '.' | ':' | '/' | '%')
 }
 
 impl Registers {
@@ -66,26 +66,33 @@ impl Registers {
     }
 
     /// Store deleted text: in `name` if given; otherwise small deletes (within one line) go to
-    /// `"-` and others shift through `"1`–`"9`. `numbered` forces the latter, as Vim does for
-    /// some motions (`%`, `{`, `}`, searches).
+    /// `"-` and others shift through `"1`–`"9`. (Vim's documentation says deletes with `%`, `{`,
+    /// `}` and searches always use `"1`, but Neovim 0.12 puts a small `d%` only in `"-`; flux
+    /// follows Neovim, so `numbered` currently changes nothing.)
     pub fn delete(&mut self, name: Option<char>, reg: Register, numbered: bool) {
-        match name {
-            Some('_') => {}
-            None | Some('"') => {
-                if numbered || reg.kind != RegisterKind::Char || reg.text.contains('\n') {
-                    for n in (1..9).rev() {
-                        let from = char::from_digit(n, 10).unwrap();
-                        let to = char::from_digit(n + 1, 10).unwrap();
-                        if let Some(r) = self.contents.remove(&from) {
-                            self.contents.insert(to, r);
-                        }
-                    }
-                    self.set('1', reg);
-                } else {
-                    self.set('-', reg);
+        let _ = numbered;
+        let named = match name {
+            Some('_') => return,
+            None | Some('"') => None,
+            Some(c) => Some(c),
+        };
+        // Like Vim's `op_delete`: a delete of more than a line always shifts into `"1`, even
+        // into a named register; a small one goes to `"-` only when no register is named.
+        let big = reg.kind != RegisterKind::Char || reg.text.contains('\n');
+        if big {
+            for n in (1..9).rev() {
+                let from = char::from_digit(n, 10).unwrap();
+                let to = char::from_digit(n + 1, 10).unwrap();
+                if let Some(r) = self.contents.remove(&from) {
+                    self.contents.insert(to, r);
                 }
             }
-            Some(c) => self.write_named(c, reg),
+            self.set('1', reg.clone());
+        } else if named.is_none() {
+            self.set('-', reg.clone());
+        }
+        if let Some(c) = named {
+            self.write_named(c, reg);
         }
     }
 
@@ -105,6 +112,12 @@ impl Registers {
             return;
         }
         self.set(lower, reg);
+    }
+
+    /// Set a read-only register (`".`, `":`), which doesn't change what `""` refers to.
+    pub fn set_readonly(&mut self, name: char, text: String) {
+        self.contents
+            .insert(name, Register::new(text, RegisterKind::Char));
     }
 
     fn set(&mut self, name: char, reg: Register) {
