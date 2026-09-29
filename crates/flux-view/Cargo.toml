@@ -1,0 +1,14 @@
+[package]
+name = "flux-view"
+description = "Editor state for flux: buffers, windows, viewport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+flux-core.workspace = true
+
+[lints]
+workspace = true

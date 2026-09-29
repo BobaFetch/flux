@@ -1,0 +1,24 @@
+[package]
+name = "flux-term"
+description = "The flux editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "flux"
+path = "src/main.rs"
+
+[dependencies]
+flux-view.workspace = true
+flux-vim.workspace = true
+flux-tui.workspace = true
+anyhow.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

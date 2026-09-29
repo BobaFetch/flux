@@ -1,0 +1,36 @@
+[workspace]
+members = ["crates/*", "xtask"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+authors = ["Andrew Riggs <andrew@yonaka.dev>"]
+
+[workspace.dependencies]
+flux-core = { path = "crates/flux-core", version = "0.0.1" }
+flux-view = { path = "crates/flux-view", version = "0.0.1" }
+flux-vim = { path = "crates/flux-vim", version = "0.0.1" }
+flux-tui = { path = "crates/flux-tui", version = "0.0.1" }
+
+anyhow = "1.0.104"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+futures = "0.3.34"
+ropey = { version = "1.6.1", default-features = false, features = ["simd"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.release]
+debug = "line-tables-only"

@@ -1,0 +1,18 @@
+[package]
+name = "flux-tui"
+description = "Terminal rendering for flux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+flux-core.workspace = true
+flux-view.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+
+[lints]
+workspace = true
