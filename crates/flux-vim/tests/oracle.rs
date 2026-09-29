@@ -8,7 +8,7 @@ use flux_view::Editor;
 use flux_vim::{Engine, parse_keys};
 use serde_json::Value;
 
-const MILESTONE: u64 = 0;
+const MILESTONE: u64 = 1;
 /// Neovim's headless screen; the text area is 80x22 once the statusline and command line are
 /// taken.
 const SCREEN: (usize, usize) = (80, 24);
@@ -49,7 +49,15 @@ fn run_case(case: &Value, expected: &Value) -> Vec<String> {
     let mut editor = Editor::new(SCREEN.0, SCREEN.1);
     // Loading from a file: the text is newline-terminated, like the oracle's temp file.
     editor.set_text(&format!("{text}\n"));
-    let (line, col) = pair(&case["cur"]);
+    // Neovim's cursor columns are byte offsets; a column inside a character means that
+    // character.
+    let (line, byte_col) = pair(&case["cur"]);
+    let line_text = text.split('\n').nth(line).unwrap_or("");
+    let col = line_text
+        .char_indices()
+        .filter(|&(i, _)| i <= byte_col)
+        .count()
+        .saturating_sub(1);
     editor.with_window(|win, m| win.set_cursor(line, col, m));
 
     let mut engine = Engine::new();

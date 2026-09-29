@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 flux-core.workspace = true
+unicode-width.workspace = true
 
 [lints]
 workspace = true

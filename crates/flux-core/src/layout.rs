@@ -37,9 +37,10 @@ impl LineLayout {
     }
 
     /// Screen position `(row, column)` of the character at `char_idx`. On a tab this is the last
-    /// cell of the tab, where Vim puts the Normal-mode cursor. Past the end of the line it is the
-    /// cell just after the last glyph.
-    pub fn cursor_position(&self, char_idx: usize) -> (usize, usize) {
+    /// cell of the tab where Vim puts the Normal-mode cursor, or the first cell when
+    /// `tab_start` (Insert mode). Past the end of the line it is the cell just after the last
+    /// glyph.
+    pub fn cursor_position(&self, char_idx: usize, tab_start: bool) -> (usize, usize) {
         let mut found = None;
         for (r, row) in self.rows.iter().enumerate() {
             let mut x = 0;
@@ -47,6 +48,7 @@ impl LineLayout {
                 if glyph.char_idx == char_idx {
                     match glyph.kind {
                         GlyphKind::Filler => {}
+                        GlyphKind::Tab if tab_start => return (r, x),
                         GlyphKind::Tab => found = Some((r, x)),
                         GlyphKind::Text | GlyphKind::Special => return (r, x),
                     }
@@ -158,7 +160,7 @@ mod tests {
     fn empty_line_is_one_row() {
         let layout = layout_line("", 8, Some(10));
         assert_eq!(layout.row_count(), 1);
-        assert_eq!(layout.cursor_position(0), (0, 0));
+        assert_eq!(layout.cursor_position(0, false), (0, 0));
     }
 
     #[test]
@@ -166,8 +168,9 @@ mod tests {
         let layout = layout_line("a\tb", 4, None);
         assert_eq!(render(&layout), ["a   b"]);
         // Normal-mode cursor sits on the last cell of the tab.
-        assert_eq!(layout.cursor_position(1), (0, 3));
-        assert_eq!(layout.cursor_position(2), (0, 4));
+        assert_eq!(layout.cursor_position(1, false), (0, 3));
+        assert_eq!(layout.cursor_position(1, true), (0, 1));
+        assert_eq!(layout.cursor_position(2, false), (0, 4));
     }
 
     #[test]
@@ -198,14 +201,14 @@ mod tests {
     fn wide_char_that_does_not_fit_gets_a_filler() {
         let layout = layout_line("abc日本", 8, Some(4));
         assert_eq!(render(&layout), ["abc>", "日本"]);
-        assert_eq!(layout.cursor_position(3), (1, 0));
-        assert_eq!(layout.cursor_position(4), (1, 2));
+        assert_eq!(layout.cursor_position(3, false), (1, 0));
+        assert_eq!(layout.cursor_position(4, false), (1, 2));
     }
 
     #[test]
     fn combining_sequences_are_one_glyph() {
         let layout = layout_line("e\u{301}x", 8, None);
         assert_eq!(layout.rows[0].len(), 2);
-        assert_eq!(layout.cursor_position(2), (0, 1));
+        assert_eq!(layout.cursor_position(2, false), (0, 1));
     }
 }

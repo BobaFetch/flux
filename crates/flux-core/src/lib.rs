@@ -1,7 +1,13 @@
-//! Text storage and screen layout for flux. No IO, no editor state.
+//! Text storage, editing and screen layout for flux. No IO.
 
+pub mod chars;
+pub mod edit;
+pub mod history;
 pub mod layout;
 pub mod text;
 
+pub use edit::Edit;
+pub use history::{Change, History, Step};
 pub use layout::{Glyph, GlyphKind, LineLayout, layout_line};
+pub use ropey::Rope;
 pub use text::{LineEnding, Text};

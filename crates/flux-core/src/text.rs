@@ -1,8 +1,15 @@
-//! Buffer text, stored as a rope.
+//! Buffer text, stored as a rope of lines joined by `\n`.
+//!
+//! Like Vim, the text is a list of lines: the final line terminator isn't part of it, and `\r\n`
+//! line endings are converted on load. Both are remembered so the file is written back the same
+//! way.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use ropey::{Rope, RopeSlice};
+
+use crate::Edit;
 
 /// How lines end on disk, like Vim's 'fileformat'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -13,17 +20,45 @@ pub enum LineEnding {
     Crlf,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Text {
     rope: Rope,
     line_ending: LineEnding,
+    final_eol: bool,
+    /// The buffer has no lines at all, as opposed to one empty line: an empty file, or after
+    /// deleting every line. Vim writes such a buffer as an empty file.
+    no_lines: bool,
+}
+
+impl Default for Text {
+    fn default() -> Self {
+        Self {
+            rope: Rope::new(),
+            line_ending: LineEnding::Lf,
+            final_eol: true,
+            no_lines: true,
+        }
+    }
 }
 
 impl Text {
-    pub fn new(s: &str) -> Self {
-        let rope = Rope::from_str(s);
-        let line_ending = detect_line_ending(&rope);
-        Self { rope, line_ending }
+    /// Text from a file's contents.
+    pub fn new(contents: &str) -> Self {
+        let line_ending = detect_line_ending(contents);
+        let mut text: Cow<'_, str> = match line_ending {
+            LineEnding::Crlf => contents.replace("\r\n", "\n").into(),
+            LineEnding::Lf => contents.into(),
+        };
+        let final_eol = text.is_empty() || text.ends_with('\n');
+        if text.ends_with('\n') {
+            text.to_mut().pop();
+        }
+        Self {
+            rope: Rope::from_str(&text),
+            line_ending,
+            final_eol,
+            no_lines: contents.is_empty(),
+        }
     }
 
     pub fn rope(&self) -> &Rope {
@@ -34,42 +69,46 @@ impl Text {
         self.line_ending
     }
 
-    pub fn len_bytes(&self) -> usize {
-        self.rope.len_bytes()
+    /// Whether the file had a final line terminator. Vim reports a missing one as `[noeol]`.
+    pub fn has_final_eol(&self) -> bool {
+        self.final_eol
+    }
+
+    /// No lines at all (see the field). Vim shows `--No lines in buffer--` for this.
+    pub fn has_no_lines(&self) -> bool {
+        self.no_lines
+    }
+
+    pub fn set_no_lines(&mut self, no_lines: bool) {
+        self.no_lines = no_lines && self.rope.len_chars() == 0;
     }
 
     pub fn is_empty(&self) -> bool {
         self.rope.len_chars() == 0
     }
 
-    /// Whether the last line has a terminator. Vim reports a missing one as `[noeol]`.
-    pub fn has_final_eol(&self) -> bool {
-        self.is_empty() || self.ends_with_newline()
+    pub fn len_chars(&self) -> usize {
+        self.rope.len_chars()
     }
 
-    /// Number of lines as Vim counts them: a final line terminator ends the last line rather than
-    /// starting a new one, and empty text still has one empty line.
+    /// Number of lines; at least one.
     pub fn line_count(&self) -> usize {
-        let n = self.rope.len_lines();
-        if n > 1 && self.ends_with_newline() {
-            n - 1
-        } else {
-            n
-        }
+        self.rope.len_lines()
     }
 
-    /// Line `idx` (0-based) without its line ending.
+    pub fn last_line(&self) -> usize {
+        self.line_count() - 1
+    }
+
+    /// Line `idx` (0-based) without its line terminator.
     pub fn line(&self, idx: usize) -> RopeSlice<'_> {
-        debug_assert!(idx < self.line_count(), "line {idx} out of range");
         let line = self.rope.line(idx);
-        let mut end = line.len_chars();
-        if end > 0 && line.char(end - 1) == '\n' {
-            end -= 1;
-            if self.line_ending == LineEnding::Crlf && end > 0 && line.char(end - 1) == '\r' {
-                end -= 1;
-            }
+        let len = line.len_chars();
+        if len > 0 && line.char(len - 1) == '\n' {
+            line.slice(..len - 1)
+        } else {
+            line
         }
-        line.slice(..end)
     }
 
     /// Line `idx` as a string, borrowed when the rope stores it contiguously.
@@ -77,21 +116,75 @@ impl Text {
         self.line(idx).into()
     }
 
-    fn ends_with_newline(&self) -> bool {
-        let len = self.rope.len_chars();
-        len > 0 && self.rope.char(len - 1) == '\n'
+    /// Length of line `idx` in chars, without the terminator.
+    pub fn line_len(&self, idx: usize) -> usize {
+        self.line(idx).len_chars()
+    }
+
+    /// Char index where line `idx` starts.
+    pub fn line_start(&self, idx: usize) -> usize {
+        self.rope.line_to_char(idx)
+    }
+
+    /// Char index of column `col` (a char index within the line) on line `line`.
+    pub fn pos_to_char(&self, line: usize, col: usize) -> usize {
+        self.line_start(line) + col.min(self.line_len(line))
+    }
+
+    /// `(line, col)` of char index `idx`.
+    pub fn char_to_pos(&self, idx: usize) -> (usize, usize) {
+        let line = self.rope.char_to_line(idx.min(self.len_chars()));
+        (line, idx - self.line_start(line))
+    }
+
+    pub fn slice(&self, range: Range<usize>) -> String {
+        self.rope.slice(range).to_string()
+    }
+
+    /// Apply `edit`, returning the edit that undoes it.
+    pub fn apply(&mut self, edit: &Edit) -> Edit {
+        let end = edit.at + edit.delete;
+        let removed = self.rope.slice(edit.at..end).to_string();
+        self.rope.remove(edit.at..end);
+        self.rope.insert(edit.at, &edit.insert);
+        self.no_lines = false;
+        Edit {
+            at: edit.at,
+            delete: edit.insert.chars().count(),
+            insert: removed,
+        }
+    }
+
+    /// The file contents to write: every line terminated (Vim's 'fixendofline'), in the file's
+    /// line ending.
+    pub fn to_file_contents(&self) -> String {
+        if self.no_lines {
+            return String::new();
+        }
+        let eol = match self.line_ending {
+            LineEnding::Lf => "\n",
+            LineEnding::Crlf => "\r\n",
+        };
+        let mut out = String::with_capacity(self.rope.len_bytes() + self.line_count() * eol.len());
+        for chunk in self.rope.chunks() {
+            match self.line_ending {
+                LineEnding::Lf => out.push_str(chunk),
+                LineEnding::Crlf => out.push_str(&chunk.replace('\n', "\r\n")),
+            }
+        }
+        out.push_str(eol);
+        out
     }
 }
 
-fn detect_line_ending(rope: &Rope) -> LineEnding {
+fn detect_line_ending(contents: &str) -> LineEnding {
     let mut saw_newline = false;
-    for line in rope.lines() {
-        let len = line.len_chars();
-        if len == 0 || line.char(len - 1) != '\n' {
+    for line in contents.split_inclusive('\n') {
+        if !line.ends_with('\n') {
             continue;
         }
         saw_newline = true;
-        if len < 2 || line.char(len - 2) != '\r' {
+        if !line.ends_with("\r\n") {
             return LineEnding::Lf;
         }
     }
@@ -115,32 +208,39 @@ mod tests {
     #[test]
     fn final_newline_terminates_last_line() {
         let text = Text::new("a\nb\n");
-        assert_eq!(text.line_count(), 2);
         assert_eq!(lines(&text), ["a", "b"]);
         assert!(text.has_final_eol());
+        assert_eq!(text.to_file_contents(), "a\nb\n");
     }
 
     #[test]
-    fn missing_final_newline() {
+    fn missing_final_newline_is_added_on_write() {
         let text = Text::new("a\nb");
         assert_eq!(lines(&text), ["a", "b"]);
         assert!(!text.has_final_eol());
+        assert_eq!(text.to_file_contents(), "a\nb\n");
     }
 
     #[test]
-    fn empty_text_has_one_empty_line() {
+    fn empty_file_has_no_lines_but_one_empty_line() {
         let text = Text::new("");
         assert_eq!(lines(&text), [""]);
-        assert!(text.has_final_eol());
-        assert_eq!(Text::new("\n").line_count(), 1);
+        assert!(text.has_no_lines());
+        assert_eq!(text.to_file_contents(), "");
+
+        let text = Text::new("\n");
+        assert_eq!(lines(&text), [""]);
+        assert!(!text.has_no_lines());
+        assert_eq!(text.to_file_contents(), "\n");
         assert_eq!(Text::new("\n\n").line_count(), 2);
     }
 
     #[test]
-    fn crlf_is_stripped_only_when_consistent() {
+    fn crlf_is_converted_only_when_consistent() {
         let dos = Text::new("a\r\nb\r\n");
         assert_eq!(dos.line_ending(), LineEnding::Crlf);
         assert_eq!(lines(&dos), ["a", "b"]);
+        assert_eq!(dos.to_file_contents(), "a\r\nb\r\n");
 
         let mixed = Text::new("a\r\nb\n");
         assert_eq!(mixed.line_ending(), LineEnding::Lf);
@@ -149,7 +249,24 @@ mod tests {
 
     #[test]
     fn only_lf_breaks_lines() {
-        let text = Text::new("a\rb\u{2028}c\n");
-        assert_eq!(text.line_count(), 1);
+        assert_eq!(Text::new("a\rb\u{2028}c\n").line_count(), 1);
+    }
+
+    #[test]
+    fn positions() {
+        let text = Text::new("ab\ncde\n");
+        assert_eq!(text.pos_to_char(1, 2), 5);
+        assert_eq!(text.char_to_pos(5), (1, 2));
+        assert_eq!(text.char_to_pos(2), (0, 2));
+        assert_eq!(text.line_len(1), 3);
+    }
+
+    #[test]
+    fn apply_returns_the_inverse() {
+        let mut text = Text::new("hello world\n");
+        let inverse = text.apply(&Edit::replace(0..5, "bye"));
+        assert_eq!(text.line_str(0), "bye world");
+        text.apply(&inverse);
+        assert_eq!(text.line_str(0), "hello world");
     }
 }

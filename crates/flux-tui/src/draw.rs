@@ -1,7 +1,9 @@
 //! Draws the editor into a grid: the window's text, the statusline and the command line.
 
 use flux_core::{GlyphKind, LineLayout, layout_line};
-use flux_view::{Editor, Mode};
+use flux_view::{Editor, MessageKind, Mode};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::grid::{Color, Grid, Style};
 
@@ -13,8 +15,19 @@ const STATUS_LINE: Style = Style {
     ..Style::fg(Color::Reset)
 };
 
-/// Draw `editor` into `grid`, returning where the terminal cursor should go.
-pub fn draw(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
+/// Vim's MoreMsg highlight.
+const MORE_MSG: Style = Style {
+    bold: true,
+    ..Style::fg(Color::Ansi(10))
+};
+const MODE_MSG: Style = Style {
+    bold: true,
+    ..Style::fg(Color::Reset)
+};
+
+/// Draw `editor` into `grid`, returning where the terminal cursor should go. `showcmd` is a
+/// partly typed command, shown at the bottom right as Vim's 'showcmd' does.
+pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, usize)> {
     let (width, height) = (grid.width(), grid.height());
     if width == 0 || height == 0 {
         return None;
@@ -26,6 +39,22 @@ pub fn draw(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
     }
     if let Some(pos) = draw_cmdline(editor, grid, height - 1) {
         cursor = Some(pos);
+    }
+    if editor.hit_enter
+        && let Some(pos) = draw_hit_enter(editor, grid)
+    {
+        return Some(pos);
+    }
+    if !showcmd.is_empty() && width > 11 && editor.mode != Mode::CmdLine {
+        let text: String = showcmd
+            .chars()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        grid.put_str(width - 11, height - 1, &text, Style::default());
     }
     cursor
 }
@@ -55,7 +84,7 @@ fn draw_text(editor: &Editor, grid: &mut Grid, text_rows: usize) -> Option<(usiz
         let shown = layout.row_count().min(text_rows - row);
         draw_rows(grid, &layout, row, shown);
         if line == win.cursor.line {
-            let (r, x) = layout.cursor_position(win.cursor.col);
+            let (r, x) = layout.cursor_position(win.cursor.col, editor.mode == Mode::Insert);
             if r < shown {
                 cursor = Some((x.min(grid.width() - 1), row + r));
             }
@@ -90,7 +119,9 @@ fn draw_statusline(editor: &Editor, grid: &mut Grid, y: usize) {
     let ruler = format!("{:<14} {}", cursor_ruler(editor), relative_position(editor));
     let ruler_width = ruler.chars().count();
     let name_room = grid.width().saturating_sub(ruler_width + 1);
-    let name = truncate_left(&buffer.name(), name_room);
+    // `%<%f %h%w%m%r`: the name, a space, then flags; truncated from the start as one piece.
+    let flags = if buffer.modified() { "[+]" } else { "" };
+    let name = truncate_left(&format!("{} {flags}", buffer.name()), name_room);
     grid.put_str(0, y, &name, STATUS_LINE);
     grid.put_str(
         grid.width().saturating_sub(ruler_width),
@@ -103,9 +134,16 @@ fn draw_statusline(editor: &Editor, grid: &mut Grid, y: usize) {
 /// `%l,%c%V`: line, byte column and, when different, screen column. An empty line is `0-1`.
 fn cursor_ruler(editor: &Editor) -> String {
     let cursor = editor.window.cursor;
-    let line = editor.current_buffer().text.line_str(cursor.line);
+    let text = &editor.current_buffer().text;
+    let line = text.line_str(cursor.line);
     if line.is_empty() {
-        return format!("{},0-1", cursor.line + 1);
+        // A buffer with no lines at all shows line 0.
+        let n = if text.has_no_lines() {
+            0
+        } else {
+            cursor.line + 1
+        };
+        return format!("{n},0-1");
     }
     let byte_col = line
         .char_indices()
@@ -113,7 +151,10 @@ fn cursor_ruler(editor: &Editor) -> String {
         .map_or(line.len(), |(i, _)| i)
         + 1;
     let layout = layout_line(&line, editor.options.tabstop, None);
-    let screen_col = layout.cursor_position(cursor.col).1 + 1;
+    let screen_col = layout
+        .cursor_position(cursor.col, editor.mode == Mode::Insert)
+        .1
+        + 1;
     if screen_col == byte_col {
         format!("{},{byte_col}", cursor.line + 1)
     } else {
@@ -142,6 +183,54 @@ fn relative_position(editor: &Editor) -> String {
     }
 }
 
+/// Vim's 'shortmess' `t`: drop the start of a message too wide for `room`, marking it with `<`.
+fn truncate_start(s: &str, room: usize) -> String {
+    let width = UnicodeWidthStr::width(s);
+    if width <= room {
+        return s.to_owned();
+    }
+    let mut size = width;
+    let mut graphemes = s.graphemes(true);
+    while size >= room {
+        match graphemes.next() {
+            Some(g) => size -= UnicodeWidthStr::width(g),
+            None => break,
+        }
+    }
+    format!("<{}", graphemes.collect::<String>())
+}
+
+/// Vim's 'shortmess' `T`: cut the middle out of a message too wide for `room`, leaving `...`.
+fn truncate_middle(s: &str, room: usize) -> String {
+    if UnicodeWidthStr::width(s) <= room || room < 4 {
+        return s.to_owned();
+    }
+    let room = room - 3;
+    let half = room / 2;
+    let mut head = String::new();
+    let mut used = 0;
+    for g in s.graphemes(true) {
+        let w = UnicodeWidthStr::width(g);
+        if used + w > half {
+            break;
+        }
+        head.push_str(g);
+        used += w;
+    }
+    let mut tail: Vec<&str> = Vec::new();
+    let mut tail_used = 0;
+    for g in s.graphemes(true).rev() {
+        let w = UnicodeWidthStr::width(g);
+        if used + tail_used + w > room {
+            break;
+        }
+        tail.push(g);
+        tail_used += w;
+    }
+    tail.reverse();
+    format!("{head}...{}", tail.concat())
+}
+
 /// Keep the end of `s`, as Vim's `%<` does, marking the cut with `<`.
 fn truncate_left(s: &str, room: usize) -> String {
     let len = s.chars().count();
@@ -161,18 +250,84 @@ fn draw_cmdline(editor: &Editor, grid: &mut Grid, y: usize) -> Option<(usize, us
             let end = grid.put_str(0, y, &format!(":{}", editor.cmdline), Style::default());
             Some((end.min(grid.width() - 1), y))
         }
+        Mode::Insert => {
+            grid.put_str(0, y, "-- INSERT --", MODE_MSG);
+            None
+        }
+        Mode::Normal if editor.insert_pending => {
+            grid.put_str(0, y, "-- (insert) --", MODE_MSG);
+            None
+        }
         Mode::Normal => {
             if let Some(message) = &editor.message {
-                let style = if message.is_error {
+                let style = if message.is_error() {
                     ERROR
                 } else {
                     Style::default()
                 };
-                grid.put_str(0, y, &message.text, style);
+                // Room up to the showcmd column, like Vim's `msg_may_trunc`/`msg_strtrunc`.
+                let room = grid.width().saturating_sub(12).max(1);
+                let text = match message.kind {
+                    MessageKind::Info => truncate_middle(&message.text, room),
+                    MessageKind::File => truncate_start(&message.text, room),
+                    MessageKind::Full | MessageKind::Error => message.text.clone(),
+                };
+                grid.put_str(0, y, &text, style);
             }
             None
         }
     }
+}
+
+/// Neovim's hit-enter prompt for a message longer than one line: a blank separator row, the
+/// message, and the prompt, drawn over the bottom of the screen.
+fn draw_hit_enter(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
+    let message = editor.message.as_ref()?;
+    let width = grid.width().max(1);
+    let wrapped: Vec<String> = message
+        .text
+        .lines()
+        .flat_map(|line| wrap(line, width))
+        .collect();
+    let lines: Vec<&str> = wrapped.iter().map(String::as_str).collect();
+    let height = grid.height();
+    let rows = (lines.len() + 2).min(height);
+    let first = height - rows;
+    for y in first..height {
+        grid.fill_row(y, Style::default());
+    }
+    let style = if message.is_error() {
+        ERROR
+    } else {
+        Style::default()
+    };
+    let shown = rows.saturating_sub(2);
+    for (i, line) in lines[lines.len() - shown..].iter().enumerate() {
+        grid.put_str(0, first + 1 + i, line, style);
+    }
+    let end = grid.put_str(
+        0,
+        height - 1,
+        "Press ENTER or type command to continue",
+        MORE_MSG,
+    );
+    Some((end.min(grid.width() - 1), height - 1))
+}
+
+/// Split `line` into pieces at most `width` cells wide.
+fn wrap(line: &str, width: usize) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut used = 0;
+    for g in line.graphemes(true) {
+        let w = UnicodeWidthStr::width(g);
+        if used + w > width {
+            out.push(String::new());
+            used = 0;
+        }
+        out.last_mut().unwrap().push_str(g);
+        used += w;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -182,7 +337,7 @@ mod tests {
     fn render(editor: &Editor) -> (Vec<String>, Option<(usize, usize)>) {
         let (w, h) = editor.screen_size();
         let mut grid = Grid::new(w, h);
-        let cursor = draw(editor, &mut grid);
+        let cursor = draw(editor, "", &mut grid);
         let rows = (0..h)
             .map(|y| grid.row_text(y).trim_end().to_owned())
             .collect();

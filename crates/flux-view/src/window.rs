@@ -22,6 +22,9 @@ pub struct Window {
     /// The virtual column vertical moves aim for (Vim's `curswant`). It survives passing
     /// through shorter lines.
     pub curswant: usize,
+    /// `curswant` is stale: recompute it from the cursor before the next vertical move (Vim's
+    /// `w_set_curswant`). Horizontal moves set this rather than computing it straight away.
+    pub set_curswant: bool,
     /// First buffer line shown.
     pub top: usize,
     /// Text area size in cells.
@@ -71,6 +74,27 @@ impl Metrics<'_> {
         last
     }
 
+    /// The virtual column of the Normal-mode cursor on character `col`: the last cell of a tab,
+    /// the first cell of anything else. With `insert`, the first cell of a tab too.
+    pub fn cursor_vcol(&self, line: usize, col: usize, insert: bool) -> usize {
+        let layout = layout_line(&self.text.line_str(line), self.tabstop, None);
+        let mut vcol = 0;
+        for glyph in &layout.rows[0] {
+            if glyph.char_idx == col {
+                if glyph.kind != flux_core::GlyphKind::Tab || insert {
+                    return vcol;
+                }
+                let tab_end = layout.rows[0].iter().filter(|g| g.char_idx == col).count();
+                return vcol + tab_end - 1;
+            }
+            if glyph.char_idx > col {
+                break;
+            }
+            vcol += usize::from(glyph.width);
+        }
+        vcol
+    }
+
     /// The virtual column where character `col` of `line` starts.
     pub fn vcol_of(&self, line: usize, col: usize) -> usize {
         let layout = layout_line(&self.text.line_str(line), self.tabstop, None);
@@ -100,6 +124,7 @@ impl Window {
             buffer,
             cursor: Cursor::default(),
             curswant: 0,
+            set_curswant: true,
             top: 0,
             width,
             height,
@@ -112,7 +137,7 @@ impl Window {
     fn cursor_row(&self, m: &Metrics) -> usize {
         let above: usize = (self.top..self.cursor.line).map(|l| m.rows(l)).sum();
         let layout = layout_line(&m.text.line_str(self.cursor.line), m.tabstop, Some(m.width));
-        above + layout.cursor_position(self.cursor.col).0
+        above + layout.cursor_position(self.cursor.col, false).0
     }
 
     /// Change the window's height, keeping the cursor at the same relative height, the way Vim
@@ -148,7 +173,7 @@ impl Window {
         let height = self.height as isize;
         let cursor_line = self.cursor.line;
         let layout = layout_line(&m.text.line_str(cursor_line), m.tabstop, Some(m.width));
-        let mut line_size = layout.cursor_position(self.cursor.col).0 as isize;
+        let mut line_size = layout.cursor_position(self.cursor.col, false).0 as isize;
         let wrow = ((self.fraction * self.height).saturating_sub(1) / FRACTION_MULT) as isize;
         let mut sline = wrow - line_size;
         if sline >= 0 {
@@ -195,17 +220,26 @@ impl Window {
         }
     }
 
+    /// Bring `curswant` up to date if a horizontal move left it stale.
+    pub fn update_curswant(&mut self, m: &Metrics, insert: bool) {
+        if self.set_curswant {
+            self.curswant = m.cursor_vcol(self.cursor.line, self.cursor.col, insert);
+            self.set_curswant = false;
+        }
+    }
+
     /// Move the cursor to `line`, in the column nearest `curswant`, and scroll it into view.
     pub fn set_cursor_line(&mut self, line: usize, m: &Metrics) {
+        self.update_curswant(m, false);
         self.place_on_line(line.min(m.last_line()), m);
         self.scroll_to_cursor(m);
     }
 
-    /// Put the cursor at an exact position, making its column the new `curswant`.
+    /// Put the cursor at an exact position; vertical moves will aim for its column.
     pub fn set_cursor(&mut self, line: usize, col: usize, m: &Metrics) {
         let line = line.min(m.last_line());
         self.cursor = Cursor { line, col };
-        self.curswant = m.vcol_of(line, col);
+        self.set_curswant = true;
         self.scroll_to_cursor(m);
     }
 
@@ -301,6 +335,7 @@ impl Window {
 
     /// Keep the cursor inside the window after the view moved.
     fn clamp_cursor_to_view(&mut self, m: &Metrics) {
+        self.update_curswant(m, false);
         let line = self.cursor.line.clamp(self.top, self.bottom(m));
         if line != self.cursor.line {
             self.place_on_line(line, m);
@@ -311,6 +346,7 @@ impl Window {
     /// of wrapped lines, keeping the position within the row. Returns false if it hit the end of
     /// the buffer first. This is Neovim's `nv_screengo`, which works on `curswant` alone.
     fn move_screen_rows(&mut self, down: bool, mut dist: usize, m: &Metrics) -> bool {
+        self.update_curswant(m, false);
         let width = m.width.max(1);
         let span = |line: usize| m.rows(line) * width;
         let mut line = self.cursor.line;
@@ -339,6 +375,7 @@ impl Window {
             }
         }
         self.curswant = want;
+        self.set_curswant = false;
         self.place_on_line(line, m);
         ok
     }
@@ -436,6 +473,7 @@ impl Window {
     /// `CTRL-F`: scroll forward a page, keeping two lines of overlap, and put the cursor on the top
     /// line. When the last line is already visible, it scrolls to the top of the window.
     pub fn page_down(&mut self, m: &Metrics) -> bool {
+        self.update_curswant(m, false);
         let last = m.last_line();
         if self.top == last {
             return false;
@@ -452,6 +490,7 @@ impl Window {
     /// `CTRL-B`: scroll back a page, keeping two lines of overlap, and put the cursor on the bottom
     /// line.
     pub fn page_up(&mut self, m: &Metrics) -> bool {
+        self.update_curswant(m, false);
         if self.top == 0 {
             return false;
         }

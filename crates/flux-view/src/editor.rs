@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::{Buffer, BufferId, Metrics, Window};
+use flux_core::Text;
+
+use crate::{Buffer, BufferId, Cursor, Metrics, Registers, Window};
 
 /// Rows below the text area: the statusline and the command line.
 const CHROME_ROWS: usize = 2;
@@ -8,23 +10,54 @@ const CHROME_ROWS: usize = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
+    Insert,
     CmdLine,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub text: String,
-    pub is_error: bool,
+    pub kind: MessageKind,
 }
 
+/// How a message that doesn't fit on the command line is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageKind {
+    /// Cut in the middle, leaving `...` ('shortmess' `T`).
+    Info,
+    /// A file message (`:w`): loses its start, marked `<` ('shortmess' `t`).
+    File,
+    /// Shown in full, wrapping and waiting for a key (`CTRL-G`).
+    Full,
+    /// Shown in full in the error color.
+    Error,
+}
+
+impl Message {
+    pub fn is_error(&self) -> bool {
+        self.kind == MessageKind::Error
+    }
+}
+
+/// Neovim's defaults for the options flux implements so far.
 #[derive(Debug, Clone)]
 pub struct Options {
     pub tabstop: usize,
+    pub shiftwidth: usize,
+    pub expandtab: bool,
+    pub autoindent: bool,
+    pub smarttab: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { tabstop: 8 }
+        Self {
+            tabstop: 8,
+            shiftwidth: 8,
+            expandtab: false,
+            autoindent: true,
+            smarttab: true,
+        }
     }
 }
 
@@ -37,6 +70,11 @@ pub struct Editor {
     pub cmdline: String,
     pub message: Option<Message>,
     pub options: Options,
+    pub registers: Registers,
+    /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
+    pub hit_enter: bool,
+    /// A Normal-mode command is being typed with `CTRL-O` from Insert mode.
+    pub insert_pending: bool,
     pub quit: bool,
     screen_width: usize,
     screen_height: usize,
@@ -53,6 +91,9 @@ impl Editor {
             cmdline: String::new(),
             message: None,
             options: Options::default(),
+            registers: Registers::default(),
+            hit_enter: false,
+            insert_pending: false,
             quit: false,
             screen_width: 0,
             screen_height: 0,
@@ -76,7 +117,8 @@ impl Editor {
     /// Replace the current buffer's text, as if it had been loaded, and reset the view.
     pub fn set_text(&mut self, text: &str) {
         let id = self.window.buffer;
-        self.buffers[id.0].text = flux_core::Text::new(text);
+        self.buffers[id.0].text = Text::new(text);
+        self.buffers[id.0].history = Default::default();
         self.window.cursor = Default::default();
         self.window.top = 0;
     }
@@ -116,6 +158,59 @@ impl Editor {
         &self.buffers[self.window.buffer.0]
     }
 
+    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
+        &mut self.buffers[self.window.buffer.0]
+    }
+
+    pub fn text(&self) -> &Text {
+        &self.current_buffer().text
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        self.window.cursor
+    }
+
+    /// Metrics of the current window's buffer.
+    pub fn metrics(&self) -> Metrics<'_> {
+        Metrics {
+            text: &self.current_buffer().text,
+            tabstop: self.options.tabstop,
+            width: self.window.width,
+            height: self.window.height,
+        }
+    }
+
+    /// Vim's `:checktime`, also run when the terminal regains focus: if the file changed on
+    /// disk, reload it when there are no unsaved changes ('autoread'), otherwise warn.
+    pub fn check_time(&mut self) {
+        let buffer = self.current_buffer();
+        if !buffer.changed_on_disk() {
+            return;
+        }
+        let name = buffer.name();
+        let exists = buffer.path.as_ref().is_some_and(|p| p.exists());
+        if !exists {
+            self.current_buffer_mut().acknowledge_disk_state();
+            self.error(format!("E211: File \"{name}\" no longer available"));
+        } else if buffer.modified() {
+            self.current_buffer_mut().acknowledge_disk_state();
+            self.error(format!(
+                "W12: Warning: File \"{name}\" has changed and the buffer was changed in Vim as well"
+            ));
+        } else {
+            let cursor = self.window.cursor;
+            if let Err(e) = self.current_buffer_mut().reload((cursor.line, cursor.col)) {
+                self.error(format!("\"{name}\" {e}"));
+            }
+            self.with_window(|win, m| {
+                let line = win.cursor.line.min(m.text.last_line());
+                win.cursor.line = line;
+                win.cursor.col = win.cursor.col.min(m.text.line_len(line).saturating_sub(1));
+                win.scroll_to_cursor(m);
+            });
+        }
+    }
+
     /// Run `f` with the window and the metrics of the buffer it shows.
     pub fn with_window<R>(&mut self, f: impl FnOnce(&mut Window, &Metrics) -> R) -> R {
         let buffer = &self.buffers[self.window.buffer.0];
@@ -129,16 +224,30 @@ impl Editor {
     }
 
     pub fn info(&mut self, text: impl Into<String>) {
-        self.message = Some(Message {
-            text: text.into(),
-            is_error: false,
-        });
+        self.show(text.into(), MessageKind::Info);
     }
 
+    /// A message about a file, like `"main.rs" 42L, 1337B written`.
+    pub fn file_message(&mut self, text: impl Into<String>) {
+        self.show(text.into(), MessageKind::File);
+    }
+
+    /// A message shown in full even when it doesn't fit on one line.
+    pub fn full_message(&mut self, text: impl Into<String>) {
+        self.show(text.into(), MessageKind::Full);
+    }
+
+    fn show(&mut self, text: String, kind: MessageKind) {
+        let wraps = matches!(kind, MessageKind::Full | MessageKind::Error)
+            && unicode_width::UnicodeWidthStr::width(text.as_str()) >= self.screen_width.max(1);
+        // Anything longer than one line waits for a key.
+        self.hit_enter = text.contains('\n') || wraps;
+        self.message = Some(Message { text, kind });
+    }
+
+    /// An error message. One that doesn't fit on the command line wraps, and waits for a key
+    /// like any multi-line message.
     pub fn error(&mut self, text: impl Into<String>) {
-        self.message = Some(Message {
-            text: text.into(),
-            is_error: true,
-        });
+        self.show(text.into(), MessageKind::Error);
     }
 }

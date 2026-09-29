@@ -3,6 +3,7 @@
 use std::io::{self, Write};
 
 use crossterm::cursor::{SetCursorStyle, Show};
+use crossterm::event::{DisableFocusChange, EnableFocusChange};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -19,7 +20,7 @@ impl Session {
             default_hook(info);
         }));
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableFocusChange)?;
         Ok(Self)
     }
 }
@@ -35,6 +36,7 @@ fn restore() {
     // Best effort: there's nowhere to report a failure while tearing down.
     let _ = execute!(
         out,
+        DisableFocusChange,
         SetCursorStyle::DefaultUserShape,
         Show,
         LeaveAlternateScreen

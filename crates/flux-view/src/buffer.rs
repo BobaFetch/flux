@@ -1,23 +1,47 @@
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use flux_core::{LineEnding, Text};
+use flux_core::{Change, Edit, History, LineEnding, Text};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BufferId(pub usize);
+
+/// What the file looked like on disk when we last read or wrote it, to notice changes made by
+/// other programs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiskState {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl DiskState {
+    fn of(path: &Path) -> Option<Self> {
+        let meta = fs::metadata(path).ok()?;
+        Some(Self {
+            modified: meta.modified().ok(),
+            len: meta.len(),
+        })
+    }
+}
 
 #[derive(Debug)]
 pub struct Buffer {
     pub id: BufferId,
     pub text: Text,
+    pub history: History,
     /// The path as the user gave it, which is also how Vim names the buffer.
     pub path: Option<PathBuf>,
     /// The file didn't exist when opened.
     pub new_file: bool,
+    /// Edits have been made that aren't part of the undo history yet (an Insert session in
+    /// progress). They count as modifications.
+    pub uncommitted: bool,
     /// The file wasn't valid UTF-8 and was loaded with replacement characters. Writing it back
     /// would corrupt it.
     pub invalid_utf8: bool,
+    disk: Option<DiskState>,
 }
 
 impl Buffer {
@@ -25,9 +49,12 @@ impl Buffer {
         Self {
             id,
             text: Text::default(),
+            history: History::default(),
             path: None,
             new_file: false,
+            uncommitted: false,
             invalid_utf8: false,
+            disk: None,
         }
     }
 
@@ -35,14 +62,12 @@ impl Buffer {
     pub fn open(id: BufferId, path: &Path) -> io::Result<Self> {
         let mut buffer = Self::scratch(id);
         buffer.path = Some(path.to_path_buf());
-        match fs::read(path) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(s) => buffer.text = Text::new(&s),
-                Err(e) => {
-                    buffer.text = Text::new(&String::from_utf8_lossy(e.as_bytes()));
-                    buffer.invalid_utf8 = true;
-                }
-            },
+        match read_file(path) {
+            Ok((text, invalid_utf8)) => {
+                buffer.text = text;
+                buffer.invalid_utf8 = invalid_utf8;
+                buffer.disk = DiskState::of(path);
+            }
             Err(e) if e.kind() == io::ErrorKind::NotFound => buffer.new_file = true,
             Err(e) => return Err(e),
         }
@@ -55,6 +80,19 @@ impl Buffer {
             Some(path) => path.display().to_string(),
             None => "[No Name]".into(),
         }
+    }
+
+    pub fn modified(&self) -> bool {
+        self.uncommitted || self.history.is_modified()
+    }
+
+    fn line_and_byte_counts(&self) -> (usize, usize) {
+        let lines = if self.text.has_no_lines() {
+            0
+        } else {
+            self.text.line_count()
+        };
+        (lines, self.text.to_file_contents().len())
     }
 
     /// The file-info message Vim shows after loading, e.g. `"main.rs" 42L, 1337B`.
@@ -73,26 +111,159 @@ impl Buffer {
         if self.text.line_ending() == LineEnding::Crlf {
             msg.push_str(" [dos]");
         }
-        let lines = if self.text.is_empty() {
-            0
-        } else {
-            self.text.line_count()
-        };
-        msg.push_str(&format!(" {lines}L, {}B", self.text.len_bytes()));
+        let (lines, bytes) = self.line_and_byte_counts();
+        msg.push_str(&format!(" {lines}L, {bytes}B"));
         msg
     }
+
+    /// The file changed on disk since we last read or wrote it.
+    pub fn changed_on_disk(&self) -> bool {
+        let Some(path) = &self.path else {
+            return false;
+        };
+        DiskState::of(path) != self.disk
+    }
+
+    /// Accept the file's current state on disk as known, so the same change isn't reported
+    /// twice.
+    pub fn acknowledge_disk_state(&mut self) {
+        if let Some(path) = &self.path {
+            self.disk = DiskState::of(path);
+        }
+    }
+
+    /// Write the buffer to `path` (its own file when `None`), replacing the file atomically.
+    /// `force` is `:w!`: write even if the file changed on disk or would be overwritten.
+    /// Returns Vim's `"name" 3L, 42B written` message, or an error message.
+    pub fn write(&mut self, path: Option<&Path>, force: bool) -> Result<String, String> {
+        let own = path.is_none() || path == self.path.as_deref();
+        let target = match path.or(self.path.as_deref()) {
+            Some(p) => p.to_path_buf(),
+            None => return Err("E32: No file name".into()),
+        };
+        if !force {
+            if own && self.changed_on_disk() && self.disk.is_some() {
+                return Err(
+                    "WARNING: The file has been changed since reading it!!! (add ! to override)"
+                        .into(),
+                );
+            }
+            if !own && target.exists() {
+                return Err("E13: File exists (add ! to override)".into());
+            }
+            if own && self.invalid_utf8 {
+                return Err(
+                    "E513: Write error, conversion failed: the file was not valid UTF-8 (add ! to override)"
+                        .into(),
+                );
+            }
+        }
+        let existed = target.exists();
+        let contents = self.text.to_file_contents();
+        write_atomically(&target, contents.as_bytes())
+            .map_err(|e| format!("E212: Can't open file for writing: {e}"))?;
+
+        let (lines, bytes) = self.line_and_byte_counts();
+        let name = target.display().to_string();
+        if own || self.path.is_none() {
+            // `:w file` on an unnamed buffer names it, as in Vim.
+            self.path = Some(target.clone());
+            self.disk = DiskState::of(&target);
+            self.history.mark_saved();
+            self.new_file = false;
+            self.invalid_utf8 = false;
+        }
+        let new = if existed { "" } else { " [New]" };
+        Ok(format!("\"{name}\"{new} {lines}L, {bytes}B written"))
+    }
+
+    /// Reload the file from disk. Like Vim's 'undoreload', the reload is itself an undoable
+    /// change.
+    pub fn reload(&mut self, cursor: (usize, usize)) -> io::Result<()> {
+        let path = self.path.clone().ok_or(io::ErrorKind::NotFound)?;
+        let (new_text, invalid_utf8) = read_file(&path)?;
+        let before = self.text.rope().clone();
+        let replace = Edit::replace(0..self.text.len_chars(), new_text.rope().to_string());
+        let inverse = Edit::replace(0..new_text.len_chars(), before.to_string());
+        let (b, a) =
+            Change::changed_lines(&before, new_text.rope(), std::slice::from_ref(&replace));
+        let change = Change {
+            edits: vec![replace],
+            inverse: vec![inverse],
+            cursor_before: cursor,
+            before: b,
+            after: a,
+            no_lines_before: self.text.has_no_lines(),
+            no_lines_after: new_text.has_no_lines(),
+        };
+        self.text = new_text;
+        self.invalid_utf8 = invalid_utf8;
+        self.history.record(change);
+        self.history.mark_saved();
+        self.disk = DiskState::of(&path);
+        self.new_file = false;
+        Ok(())
+    }
+}
+
+fn read_file(path: &Path) -> io::Result<(Text, bool)> {
+    let bytes = fs::read(path)?;
+    Ok(match String::from_utf8(bytes) {
+        Ok(s) => (Text::new(&s), false),
+        Err(e) => (Text::new(&String::from_utf8_lossy(e.as_bytes())), true),
+    })
+}
+
+/// Write `contents` to a temporary file next to `path` and rename it into place, so a crash or
+/// full disk never leaves a half-written file. Writes through symlinks and keeps the original
+/// file's permissions.
+fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let dir = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a file name"))?;
+    let tmp = dir.join(format!(
+        ".{}.flux-{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        if let Ok(meta) = fs::metadata(&target) {
+            fs::set_permissions(&tmp, meta.permissions())?;
+        }
+        fs::rename(&tmp, &target)
+    })();
+    if result.is_err() {
+        fs::remove_file(&tmp).ok();
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn temp_path(name: &str) -> PathBuf {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "flux-view-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
 
     fn buffer_with(contents: &[u8]) -> Buffer {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!("flux-view-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("f{}.txt", NEXT.fetch_add(1, Ordering::Relaxed)));
+        let path = temp_path("f.txt");
         fs::write(&path, contents).unwrap();
         let mut buf = Buffer::open(BufferId(0), &path).unwrap();
         buf.path = Some("f.txt".into());
@@ -103,7 +274,7 @@ mod tests {
     fn file_info_messages() {
         assert_eq!(buffer_with(b"a\nb\n").file_info(), "\"f.txt\" 2L, 4B");
         assert_eq!(buffer_with(b"").file_info(), "\"f.txt\" 0L, 0B");
-        assert_eq!(buffer_with(b"a\nb").file_info(), "\"f.txt\" [noeol] 2L, 3B");
+        assert_eq!(buffer_with(b"a\nb").file_info(), "\"f.txt\" [noeol] 2L, 4B");
         assert_eq!(buffer_with(b"a\r\n").file_info(), "\"f.txt\" [dos] 1L, 3B");
     }
 
@@ -115,9 +286,106 @@ mod tests {
     }
 
     #[test]
-    fn invalid_utf8_is_flagged() {
-        let buf = buffer_with(b"ok\xff\n");
+    fn invalid_utf8_is_flagged_and_not_written_back() {
+        let path = temp_path("bad.txt");
+        fs::write(&path, b"ok\xff\n").unwrap();
+        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
         assert!(buf.invalid_utf8);
-        assert!(buf.file_info().contains("[invalid UTF-8]"));
+        assert!(buf.write(None, false).unwrap_err().starts_with("E513"));
+        assert_eq!(fs::read(&path).unwrap(), b"ok\xff\n");
+    }
+
+    #[test]
+    fn write_round_trips_and_marks_saved() {
+        let path = temp_path("w.txt");
+        fs::write(&path, "one\r\ntwo\r\n").unwrap();
+        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        let inverse = buf.text.apply(&Edit::insert(0, "zero\n"));
+        buf.history.record(Change {
+            edits: vec![Edit::insert(0, "zero\n")],
+            inverse: vec![inverse],
+            cursor_before: (0, 0),
+            before: 0..0,
+            after: 0..1,
+            no_lines_before: false,
+            no_lines_after: false,
+        });
+        assert!(buf.modified());
+        let msg = buf.write(None, false).unwrap();
+        assert!(msg.ends_with("3L, 16B written"), "{msg}");
+        assert!(!buf.modified());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "zero\r\none\r\ntwo\r\n");
+    }
+
+    #[test]
+    fn write_refuses_after_external_change() {
+        let path = temp_path("ext.txt");
+        fs::write(&path, "a\n").unwrap();
+        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        fs::write(&path, "changed elsewhere\n").unwrap();
+        assert!(buf.changed_on_disk());
+        assert!(buf.write(None, false).unwrap_err().starts_with("WARNING"));
+        assert!(buf.write(None, true).is_ok());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a\n");
+        assert!(!buf.changed_on_disk());
+    }
+
+    #[test]
+    fn write_new_file_and_to_other_path() {
+        let path = temp_path("new.txt");
+        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        assert!(
+            buf.write(None, false)
+                .unwrap()
+                .contains("[New] 0L, 0B written")
+        );
+        let other = temp_path("other.txt");
+        fs::write(&other, "x").unwrap();
+        assert!(
+            buf.write(Some(&other), false)
+                .unwrap_err()
+                .starts_with("E13")
+        );
+        assert!(buf.write(Some(&other), true).is_ok());
+        assert_eq!(buf.path.as_deref(), Some(path.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_keeps_permissions_and_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let real = temp_path("real.txt");
+        fs::write(&real, "a\n").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
+        let link = real.with_file_name("link.txt");
+        symlink(&real, &link).unwrap();
+        let mut buf = Buffer::open(BufferId(0), &link).unwrap();
+        buf.write(None, true).unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[test]
+    fn reload_is_undoable() {
+        let path = temp_path("r.txt");
+        fs::write(&path, "old\n").unwrap();
+        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        fs::write(&path, "new\n").unwrap();
+        buf.reload((0, 0)).unwrap();
+        assert_eq!(buf.text.line_str(0), "new");
+        assert!(!buf.modified());
+        let change = buf.history.undo().unwrap().change;
+        for edit in &change.inverse {
+            buf.text.apply(edit);
+        }
+        assert_eq!(buf.text.line_str(0), "old");
     }
 }

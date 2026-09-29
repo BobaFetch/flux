@@ -42,6 +42,10 @@ impl Modifiers {
         ctrl: true,
         ..Self::NONE
     };
+    pub const ALT: Self = Self {
+        alt: true,
+        ..Self::NONE
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

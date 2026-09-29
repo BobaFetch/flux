@@ -136,6 +136,7 @@ name = "flux-view"
 version = "0.0.1"
 dependencies = [
  "flux-core",
+ "unicode-width",
 ]
 
 [[package]]

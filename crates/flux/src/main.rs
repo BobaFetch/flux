@@ -60,12 +60,17 @@ async fn run(mut editor: Editor) -> Result<()> {
     loop {
         let (width, height) = editor.screen_size();
         let mut grid = Grid::new(width, height);
-        let cursor = flux_tui::draw(&editor, &mut grid);
+        let showcmd: String = engine
+            .pending_keys()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let cursor = flux_tui::draw(&editor, &showcmd, &mut grid);
         if cursor_mode != Some(editor.mode) {
             cursor_mode = Some(editor.mode);
             let style = match editor.mode {
                 Mode::Normal => SetCursorStyle::SteadyBlock,
-                Mode::CmdLine => SetCursorStyle::SteadyBar,
+                Mode::Insert | Mode::CmdLine => SetCursorStyle::SteadyBar,
             };
             queue!(out, style)?;
         }
@@ -102,6 +107,8 @@ fn handle_event(event: Event, editor: &mut Editor, engine: &mut Engine, renderer
             editor.resize(width.into(), height.into());
             renderer.invalidate();
         }
+        // Like Neovim's 'autoread': notice files changed by other programs.
+        Event::FocusGained => editor.check_time(),
         _ => {}
     }
 }
