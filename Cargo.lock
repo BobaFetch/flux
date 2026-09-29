@@ -99,16 +99,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flux-core"
-version = "0.0.1"
-dependencies = [
- "ropey",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
-name = "flux-term"
+name = "flux"
 version = "0.0.1"
 dependencies = [
  "anyhow",
@@ -118,6 +109,15 @@ dependencies = [
  "flux-vim",
  "futures",
  "tokio",
+]
+
+[[package]]
+name = "flux-core"
+version = "0.0.1"
+dependencies = [
+ "ropey",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

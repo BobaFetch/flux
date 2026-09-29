@@ -9,7 +9,9 @@ its own Lua API rather than Neovim plugin compatibility. It is early: see
 ## Build and run
 
 ```sh
-cargo run -p flux-term -- path/to/file
+cargo run -- path/to/file                 # run from the repo
+cargo install --path crates/flux          # or install `flux` into ~/.cargo/bin
+cargo test --workspace                    # all tests (plain `cargo test` covers only the binary)
 ```
 
 ## Layout
@@ -20,7 +22,7 @@ cargo run -p flux-term -- path/to/file
 | `flux-view` | Editor state: buffers, the window, and Vim's scrolling rules. |
 | `flux-vim` | The modal engine: keys in, state changes out. Key notation, Ex commands. |
 | `flux-tui` | Drawing the editor into a cell grid and writing changed cells to the terminal. |
-| `flux-term` | The `flux` binary: terminal setup and the event loop. |
+| `flux` | The `flux` binary: terminal setup and the event loop. |
 | `xtask` | Project automation (`cargo xtask …`). |
 
 ## Checking behavior against Neovim

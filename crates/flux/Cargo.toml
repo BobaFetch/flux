@@ -1,5 +1,5 @@
 [package]
-name = "flux-term"
+name = "flux"
 description = "The flux editor"
 version.workspace = true
 edition.workspace = true

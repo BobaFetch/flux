@@ -26,7 +26,7 @@ screens identical to `nvim --clean` in an 80x24 terminal.
 
 ### Manual check
 
-Run `cargo run -p flux-term -- <some file>` (a long source file with tabs and long lines is best)
+Run `cargo run -- <some file>` (a long source file with tabs and long lines is best)
 and, ideally, `nvim --clean <same file>` next to it:
 
 1. The first screen matches Neovim's: text, `~` rows, statusline, cursor.
