@@ -1,0 +1,34 @@
+name: Neovim oracle
+
+# Checks that the recorded expectations still match real Neovim. They can only drift when the
+# cases or the script that records them change, so this runs only then (or by hand).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/flux-vim/tests/oracle/**
+      - xtask/**
+  pull_request:
+    paths:
+      - crates/flux-vim/tests/oracle/**
+      - xtask/**
+  workflow_dispatch:
+
+concurrency:
+  group: oracle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          # Must match crates/flux-vim/tests/oracle/NVIM_VERSION.
+          version: v0.12.5
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask oracle check
