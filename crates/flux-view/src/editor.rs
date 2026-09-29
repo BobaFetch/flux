@@ -1,11 +1,18 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use flux_core::Text;
 
-use crate::{Buffer, BufferId, Cursor, Metrics, Registers, Window};
+use crate::{
+    Buffer, BufferId, Cursor, Dir, Jump, Layout, Metrics, Rect, Registers, Window, WindowId,
+};
 
-/// Rows below the text area: the statusline and the command line.
-const CHROME_ROWS: usize = 2;
+/// The command line: the one row below the windows.
+/// Rows below the windows for the command line and messages.
+pub const CMDLINE_ROWS: usize = 1;
+/// Vim's 'winheight' and 'winwidth': the least size of the current window.
+const WINHEIGHT: usize = 1;
+const WINWIDTH: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -77,8 +84,19 @@ impl Default for Options {
 
 #[derive(Debug)]
 pub struct Editor {
+    /// Every buffer, in number order (`:ls`).
     pub buffers: Vec<Buffer>,
+    /// The current window.
     pub window: Window,
+    /// The other windows.
+    pub windows: Vec<Window>,
+    pub layout: Layout,
+    /// The window `CTRL-W p` goes back to.
+    pub prev_window: Option<WindowId>,
+    /// `'A`–`'Z`: marks that name a file as well as a position.
+    pub global_marks: HashMap<char, (BufferId, Cursor)>,
+    /// The directory relative file names are taken from (`:cd`).
+    pub cwd: PathBuf,
     pub mode: Mode,
     /// Text typed after `:`.
     pub cmdline: String,
@@ -95,17 +113,39 @@ pub struct Editor {
     /// Counts errors reported, so a running macro can stop at the first one.
     pub error_count: u64,
     pub quit: bool,
+    /// The argument list: the files named on the command line.
+    pub args: Vec<BufferId>,
+    /// The last file in the argument list has been shown (Vim's `arg_had_last`), so quitting
+    /// doesn't warn about files not yet edited.
+    pub arg_had_last: bool,
+    /// Set by `E173` so that `:q` right after it quits anyway (Vim's `quitmore`); counts down
+    /// with every Ex command.
+    pub quitmore: u8,
+    /// The next buffer switch is into a window just split off (`:new`, `:split file`), which
+    /// doesn't record where the old buffer was left (Vim's `do_ecmd` without `oldwin`).
+    pub in_new_window: bool,
     screen_width: usize,
     screen_height: usize,
+    next_buffer: usize,
+    next_window: usize,
 }
 
 impl Editor {
-    /// An editor with one empty buffer on a `width` x `height` screen.
+    /// An editor with one empty buffer in one window on a `width` x `height` screen.
     pub fn new(width: usize, height: usize) -> Self {
-        let id = BufferId(0);
+        let buffer = BufferId(1);
+        // Vim numbers windows from 1000.
+        let win = WindowId(1000);
+        let mut first = Buffer::scratch(buffer);
+        first.created_in(win);
         let mut editor = Self {
-            buffers: vec![Buffer::scratch(id)],
-            window: Window::new(id, 0, 0),
+            buffers: vec![first],
+            window: Window::new(win, buffer, 0, 0),
+            windows: Vec::new(),
+            layout: Layout::new(win, 1, 2),
+            prev_window: None,
+            global_marks: HashMap::new(),
+            cwd: std::env::current_dir().unwrap_or_default(),
             mode: Mode::Normal,
             cmdline: String::new(),
             message: None,
@@ -120,22 +160,251 @@ impl Editor {
             recording: None,
             error_count: 0,
             quit: false,
+            args: Vec::new(),
+            arg_had_last: false,
+            quitmore: 0,
+            in_new_window: false,
             screen_width: 0,
             screen_height: 0,
+            next_buffer: 2,
+            next_window: 1001,
         };
         editor.resize(width, height);
         editor
     }
 
-    /// Replace the current buffer with `path`. Like Neovim (`'shortmess'` has `F`), a successful
-    /// load is silent; only errors are reported.
+    // ----- buffers
+
+    pub fn buffer(&self, id: BufferId) -> Option<&Buffer> {
+        self.buffers.iter().find(|b| b.id == id)
+    }
+
+    pub fn buffer_mut(&mut self, id: BufferId) -> Option<&mut Buffer> {
+        self.buffers.iter_mut().find(|b| b.id == id)
+    }
+
+    pub fn current_buffer(&self) -> &Buffer {
+        self.buffer(self.window.buffer)
+            .expect("the current window shows a buffer")
+    }
+
+    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
+        let id = self.window.buffer;
+        self.buffer_mut(id)
+            .expect("the current window shows a buffer")
+    }
+
+    /// A path as given, taken relative to the editor's directory.
+    pub fn resolve(&self, path: &Path) -> PathBuf {
+        let full = self.cwd.join(path);
+        std::fs::canonicalize(&full).unwrap_or(full)
+    }
+
+    /// The buffer for `path`, if one exists.
+    pub fn find_buffer(&self, path: &Path) -> Option<BufferId> {
+        let target = self.resolve(path);
+        self.buffers
+            .iter()
+            .find(|b| b.path.as_ref().is_some_and(|p| self.resolve(p) == target))
+            .map(|b| b.id)
+    }
+
+    fn add_buffer(&mut self, mut buffer: Buffer) -> BufferId {
+        let id = BufferId(self.next_buffer);
+        self.next_buffer += 1;
+        buffer.id = id;
+        buffer.created_in(self.window.id);
+        self.buffers.push(buffer);
+        id
+    }
+
+    /// A new empty buffer (`:enew`, `:new`).
+    pub fn new_buffer(&mut self) -> BufferId {
+        self.add_buffer(Buffer::scratch(BufferId(0)))
+    }
+
+    /// Add buffers for files named on the command line; the first is shown, the others are
+    /// read when first shown.
+    pub fn open_args(&mut self, paths: &[PathBuf]) {
+        let Some((first, rest)) = paths.split_first() else {
+            return;
+        };
+        self.open(first);
+        self.args = vec![self.window.buffer];
+        for path in rest {
+            let id = match self.find_buffer(path) {
+                Some(id) => id,
+                None => self.add_buffer(Buffer::unloaded(BufferId(0), path)),
+            };
+            self.args.push(id);
+        }
+        self.check_arg_idx();
+    }
+
+    /// Vim's `check_arg_idx`: note when the current window shows the last file of the
+    /// argument list.
+    fn check_arg_idx(&mut self) {
+        if self.args.last() == Some(&self.window.buffer) {
+            self.arg_had_last = true;
+        }
+    }
+
+    /// Open `path` in the current window at startup, replacing the empty first buffer. Like
+    /// Neovim (`'shortmess'` has `F`), a successful load is silent; only errors are reported.
     pub fn open(&mut self, path: &Path) {
         let id = self.window.buffer;
-        match Buffer::open(id, path) {
-            Ok(buffer) => self.buffers[id.0] = buffer,
+        let full = self.cwd.join(path);
+        match Buffer::open(id, &full) {
+            Ok(mut buffer) => {
+                buffer.path = Some(path.to_path_buf());
+                let current = self.current_buffer_mut();
+                buffer.positions = std::mem::take(&mut current.positions);
+                *current = buffer;
+            }
             Err(e) => self.error(format!("\"{}\" {e}", path.display())),
         }
         self.reset_view();
+    }
+
+    /// `:edit {file}`: show `path` in the current window, reading it into a new buffer unless
+    /// one is already open.
+    pub fn edit_file(&mut self, path: &Path) -> Result<(), String> {
+        let id = match self.find_buffer(path) {
+            Some(id) => id,
+            None => {
+                let full = self.cwd.join(path);
+                let mut buffer = Buffer::open(BufferId(0), &full)
+                    .map_err(|e| format!("\"{}\" {e}", path.display()))?;
+                buffer.path = Some(path.to_path_buf());
+                self.add_buffer(buffer)
+            }
+        };
+        self.show_buffer(id);
+        Ok(())
+    }
+
+    /// Show buffer `id` in the current window: the old one becomes the alternate buffer, the
+    /// cursor goes back to where it last was in `id`, and the jump is remembered.
+    pub fn show_buffer(&mut self, id: BufferId) {
+        self.switch_buffer(id, true);
+    }
+
+    /// Like [`Editor::show_buffer`]; `remember` is false when moving through the jumplist
+    /// itself.
+    pub fn switch_buffer(&mut self, id: BufferId, remember: bool) {
+        let old = self.window.buffer;
+        if old == id {
+            return;
+        }
+        let win = self.window.id;
+        let cursor = self.window.cursor;
+        let new_window = std::mem::take(&mut self.in_new_window);
+        if let Some(b) = self.buffer_mut(old) {
+            if !new_window {
+                b.remember_position(win, cursor);
+            }
+            b.marks.set('"', cursor);
+        }
+        if remember {
+            self.window.jumps.push(Jump {
+                buffer: old,
+                pos: cursor,
+            });
+            self.window.pcmark = Some(cursor);
+        }
+        if let Some(buffer) = self.buffer_mut(id) {
+            buffer.listed = true;
+            if let Err(e) = buffer.load() {
+                let name = buffer.name();
+                self.error(format!("\"{name}\" {e}"));
+            }
+        }
+        self.window.alt_buffer = Some(old);
+        self.window.buffer = id;
+        self.check_arg_idx();
+        let pos = self.current_buffer().last_position(win).unwrap_or_default();
+        self.window.top = 0;
+        self.window.set_curswant = true;
+        self.with_window(|w, m| {
+            let line = pos.line.min(m.text.last_line());
+            let col = pos.col.min(m.text.line_len(line).saturating_sub(1));
+            w.cursor = Cursor { line, col };
+            w.scroll_to_cursor(m);
+        });
+    }
+
+    /// Listed buffers in number order.
+    pub fn listed_buffers(&self) -> Vec<BufferId> {
+        self.buffers
+            .iter()
+            .filter(|b| b.listed)
+            .map(|b| b.id)
+            .collect()
+    }
+
+    /// Whether any window shows buffer `id`.
+    pub fn is_shown(&self, id: BufferId) -> bool {
+        self.window.buffer == id || self.windows.iter().any(|w| w.buffer == id)
+    }
+
+    /// `:bdelete` (or `:bwipeout` when `wipe`): unlist and unload a buffer. Windows showing it
+    /// close, except the last, which shows another buffer instead.
+    pub fn delete_buffer(&mut self, id: BufferId, wipe: bool, force: bool) -> Result<(), String> {
+        let Some(buffer) = self.buffer(id) else {
+            return Err(format!("E516: No buffers were deleted: bd {}", id.0));
+        };
+        if buffer.modified() && !force {
+            return Err(format!(
+                "E89: No write since last change for buffer {} (add ! to override)",
+                id.0
+            ));
+        }
+        // Close other windows showing it.
+        let showing: Vec<WindowId> = self
+            .layout
+            .windows()
+            .into_iter()
+            .filter(|&w| self.window_ref(w).buffer == id)
+            .collect();
+        for w in showing {
+            if self.layout.windows().len() > 1 {
+                self.close_window(w);
+            }
+        }
+        if self.window.buffer == id {
+            let alt = self
+                .window
+                .alt_buffer
+                .filter(|&a| a != id && self.buffer(a).is_some_and(|b| b.listed));
+            let next = alt.or_else(|| {
+                let listed = self.listed_buffers();
+                let pos = listed.iter().position(|&b| b == id).unwrap_or(0);
+                listed
+                    .iter()
+                    .skip(pos + 1)
+                    .chain(listed.iter().take(pos))
+                    .copied()
+                    .find(|&b| b != id)
+            });
+            let next = next.unwrap_or_else(|| self.new_buffer());
+            self.show_buffer(next);
+        }
+        for w in std::iter::once(&mut self.window).chain(self.windows.iter_mut()) {
+            if w.alt_buffer == Some(id) && wipe {
+                w.alt_buffer = None;
+            }
+            if wipe {
+                w.jumps.remove_buffer(id);
+            }
+        }
+        if wipe {
+            self.buffers.retain(|b| b.id != id);
+            self.global_marks.retain(|_, (b, _)| *b != id);
+        } else if let Some(b) = self.buffer_mut(id) {
+            b.listed = false;
+            b.unload();
+        }
+        Ok(())
     }
 
     /// Start at the top of a freshly loaded buffer. Like Vim's `:edit`, that position goes in
@@ -144,24 +413,204 @@ impl Editor {
         self.window.cursor = Default::default();
         self.window.top = 0;
         self.window.pcmark = Some(Cursor::default());
-        self.window.jumps.push(Cursor::default());
+        let buffer = self.window.buffer;
+        self.window.jumps.push(Jump {
+            buffer,
+            pos: Cursor::default(),
+        });
         self.current_buffer_mut().marks.set('"', Cursor::default());
     }
 
     /// Replace the current buffer's text, as if it had been loaded, and reset the view.
     pub fn set_text(&mut self, text: &str) {
-        let id = self.window.buffer;
-        self.buffers[id.0].text = Text::new(text);
-        self.buffers[id.0].history = Default::default();
+        let buffer = self.current_buffer_mut();
+        buffer.text = Text::new(text);
+        buffer.history = Default::default();
         self.reset_view();
+    }
+
+    // ----- windows
+
+    /// Window ids in Vim's order (top-left to bottom-right).
+    pub fn window_ids(&self) -> Vec<WindowId> {
+        self.layout.windows()
+    }
+
+    pub fn window_ref(&self, id: WindowId) -> &Window {
+        if self.window.id == id {
+            &self.window
+        } else {
+            self.windows
+                .iter()
+                .find(|w| w.id == id)
+                .expect("window in the layout")
+        }
+    }
+
+    pub fn window_mut(&mut self, id: WindowId) -> &mut Window {
+        if self.window.id == id {
+            &mut self.window
+        } else {
+            self.windows
+                .iter_mut()
+                .find(|w| w.id == id)
+                .expect("window in the layout")
+        }
+    }
+
+    /// Whether window `id`'s statusline joins the one to its right (see
+    /// [`Layout::stl_connected`]).
+    pub fn stl_connected(&self, id: WindowId) -> bool {
+        self.layout.stl_connected(id)
+    }
+
+    /// Each window with its place on screen.
+    pub fn window_rects(&self) -> Vec<(WindowId, Rect)> {
+        self.layout.rects()
+    }
+
+    /// Make `id` the current window.
+    pub fn goto_window(&mut self, id: WindowId) {
+        if self.window.id == id {
+            return;
+        }
+        let Some(i) = self.windows.iter().position(|w| w.id == id) else {
+            return;
+        };
+        let next = self.windows.remove(i);
+        let prev = std::mem::replace(&mut self.window, next);
+        self.prev_window = Some(prev.id);
+        self.windows.push(prev);
+        self.enter_resize(WINHEIGHT, WINWIDTH);
+    }
+
+    /// Vim's `win_enter`: grow the window just entered to 'winheight' and 'winwidth'.
+    fn enter_resize(&mut self, min_height: usize, min_width: usize) {
+        let id = self.window.id;
+        let Some(rect) = self.layout.rect(id) else {
+            return;
+        };
+        if rect.height < min_height {
+            self.layout.set_height(id, min_height);
+        }
+        if rect.width < min_width {
+            self.layout.set_width(id, min_width);
+        }
+        self.sync_window_sizes();
+    }
+
+    /// `:split` / `:vsplit`: a new window above (or left of) the current one, showing the same
+    /// buffer at the same place, becomes current. `size` is a count for its height or width.
+    pub fn split(&mut self, vertical: bool, size: Option<usize>) -> bool {
+        let id = WindowId(self.next_window);
+        if !self.layout.split(self.window.id, id, vertical, size) {
+            self.error("E36: Not enough room");
+            return false;
+        }
+        self.next_window += 1;
+        let mut new = self.window.clone();
+        new.id = id;
+        let old = std::mem::replace(&mut self.window, new);
+        self.prev_window = Some(old.id);
+        self.windows.push(old);
+        // A count stands in for 'winheight' or 'winwidth' while entering the new window.
+        let (min_height, min_width) = match size {
+            Some(n) if vertical => (WINHEIGHT, n),
+            Some(n) => (n, WINWIDTH),
+            None => (WINHEIGHT, WINWIDTH),
+        };
+        self.enter_resize(min_height, min_width);
+        true
+    }
+
+    /// Close window `id`, making the window that gets its space current if it was. False for
+    /// the last window.
+    pub fn close_window(&mut self, id: WindowId) -> bool {
+        let Some(gets_space) = self.layout.close(id) else {
+            return false;
+        };
+        let closed = if self.window.id == id {
+            self.goto_window(gets_space);
+            let i = self
+                .windows
+                .iter()
+                .position(|w| w.id == id)
+                .expect("closed window");
+            self.windows.remove(i)
+        } else {
+            let i = self
+                .windows
+                .iter()
+                .position(|w| w.id == id)
+                .expect("closed window");
+            self.windows.remove(i)
+        };
+        if let Some(b) = self.buffer_mut(closed.buffer) {
+            b.window_closed(closed.id, closed.cursor);
+        }
+        if self.prev_window == Some(id) {
+            self.prev_window = None;
+        }
+        self.sync_window_sizes();
+        true
+    }
+
+    /// `:only`: close every other window.
+    pub fn only_window(&mut self) {
+        for w in std::mem::take(&mut self.windows) {
+            if let Some(b) = self.buffer_mut(w.buffer) {
+                b.window_closed(w.id, w.cursor);
+            }
+        }
+        self.layout.only(self.window.id);
+        self.prev_window = None;
+        self.sync_window_sizes();
+    }
+
+    pub fn equalize_windows(&mut self) {
+        self.layout.equalize(self.window.id, Dir::Both, false);
+        self.sync_window_sizes();
+    }
+
+    /// Set window sizes from the layout, keeping each cursor at the same relative height.
+    pub fn sync_window_sizes(&mut self) {
+        let tabstop = self.options.tabstop;
+        for (id, rect) in self.layout.rects() {
+            let win = if self.window.id == id {
+                &mut self.window
+            } else {
+                match self.windows.iter_mut().find(|w| w.id == id) {
+                    Some(w) => w,
+                    None => continue,
+                }
+            };
+            let Some(buffer) = self.buffers.iter().find(|b| b.id == win.buffer) else {
+                continue;
+            };
+            let text = &buffer.text;
+            let (width, height) = (rect.width.max(1), rect.height.max(1));
+            let old_width = win.width.max(1);
+            win.set_height(&Metrics {
+                text,
+                tabstop,
+                width: old_width,
+                height,
+            });
+            win.set_width(&Metrics {
+                text,
+                tabstop,
+                width,
+                height,
+            });
+        }
     }
 
     pub fn screen_size(&self) -> (usize, usize) {
         (self.screen_width, self.screen_height)
     }
 
-    /// Resize the screen. Like Neovim, the window takes its new height first (keeping the
-    /// cursor at the same relative height) and then its new width.
+    /// Resize the screen: the layout gives or takes rows and columns from the bottom and
+    /// rightmost windows, and each window keeps its cursor at the same relative height.
     pub fn resize(&mut self, width: usize, height: usize) {
         if (width, height) != (self.screen_width, self.screen_height) {
             // A resize repaints the whole screen, which clears the message line.
@@ -169,30 +618,9 @@ impl Editor {
         }
         self.screen_width = width;
         self.screen_height = height;
-        let (width, height) = (width.max(1), height.saturating_sub(CHROME_ROWS).max(1));
-        let text = &self.buffers[self.window.buffer.0].text;
-        let tabstop = self.options.tabstop;
-        let old_width = self.window.width.max(1);
-        self.window.set_height(&Metrics {
-            text,
-            tabstop,
-            width: old_width,
-            height,
-        });
-        self.window.set_width(&Metrics {
-            text,
-            tabstop,
-            width,
-            height,
-        });
-    }
-
-    pub fn current_buffer(&self) -> &Buffer {
-        &self.buffers[self.window.buffer.0]
-    }
-
-    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
-        &mut self.buffers[self.window.buffer.0]
+        let rows = height.saturating_sub(CMDLINE_ROWS).max(2);
+        self.layout.resize(width.max(1), rows);
+        self.sync_window_sizes();
     }
 
     pub fn text(&self) -> &Text {
@@ -221,7 +649,10 @@ impl Editor {
             return;
         }
         let name = buffer.name();
-        let exists = buffer.path.as_ref().is_some_and(|p| p.exists());
+        let exists = buffer
+            .path
+            .as_ref()
+            .is_some_and(|p| self.cwd.join(p).exists());
         if !exists {
             self.current_buffer_mut().acknowledge_disk_state();
             self.error(format!("E211: File \"{name}\" no longer available"));
@@ -246,7 +677,12 @@ impl Editor {
 
     /// Run `f` with the window and the metrics of the buffer it shows.
     pub fn with_window<R>(&mut self, f: impl FnOnce(&mut Window, &Metrics) -> R) -> R {
-        let buffer = &self.buffers[self.window.buffer.0];
+        let id = self.window.buffer;
+        let buffer = self
+            .buffers
+            .iter()
+            .find(|b| b.id == id)
+            .expect("buffer of the current window");
         let metrics = Metrics {
             text: &buffer.text,
             tabstop: self.options.tabstop,
@@ -254,6 +690,32 @@ impl Editor {
             height: self.window.height,
         };
         f(&mut self.window, &metrics)
+    }
+
+    /// Move other windows showing the current buffer for an edit, as Vim's `mark_adjust` does
+    /// for their cursors and top lines.
+    pub fn adjust_other_windows(&mut self, shift: &crate::LineShift) {
+        let buffer = self.window.buffer;
+        for w in self.windows.iter_mut().filter(|w| w.buffer == buffer) {
+            if let Some(p) = shift.adjust(w.cursor) {
+                w.cursor = p;
+            }
+            let top = Cursor {
+                line: w.top,
+                col: 0,
+            };
+            w.top = shift.adjust(top).map_or(w.top, |p| p.line);
+        }
+        for w in std::iter::once(&mut self.window).chain(self.windows.iter_mut()) {
+            w.jumps.adjust(buffer, shift);
+        }
+        for (b, p) in self.global_marks.values_mut() {
+            if *b == buffer
+                && let Some(q) = shift.adjust(*p)
+            {
+                *p = q;
+            }
+        }
     }
 
     pub fn info(&mut self, text: impl Into<String>) {

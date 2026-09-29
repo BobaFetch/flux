@@ -8,7 +8,7 @@ use flux_view::Editor;
 use flux_vim::{Engine, parse_keys};
 use serde_json::Value;
 
-const MILESTONE: u64 = 2;
+const MILESTONE: u64 = 3;
 /// Neovim's headless screen; the text area is 80x22 once the statusline and command line are
 /// taken.
 const SCREEN: (usize, usize) = (80, 24);
@@ -36,6 +36,83 @@ fn keys_of(case: &Value) -> String {
     }
 }
 
+fn tempdir(id: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir()
+        .join(format!("flux-oracle-{}", std::process::id()))
+        .join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// The layout in the oracle's shape: `["leaf", buffer name, height, width, [line, byte col],
+/// top line, current]`, or `["row" | "col", [children]]`.
+fn layout_json(editor: &Editor) -> Value {
+    fn go(editor: &Editor, t: &flux_view::LayoutTree) -> Value {
+        match t {
+            flux_view::LayoutTree::Leaf(id) => {
+                let w = editor.window_ref(*id);
+                let b = editor.buffer(w.buffer).unwrap();
+                let name = b
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let line = b.text.line_str(w.cursor.line.min(b.text.last_line()));
+                let byte_col: usize = line.chars().take(w.cursor.col).map(char::len_utf8).sum();
+                serde_json::json!([
+                    "leaf",
+                    name,
+                    w.height,
+                    w.width,
+                    [w.cursor.line, byte_col],
+                    w.top,
+                    *id == editor.window.id,
+                    w.skipcol()
+                ])
+            }
+            flux_view::LayoutTree::Row(c) => {
+                serde_json::json!(["row", c.iter().map(|t| go(editor, t)).collect::<Vec<_>>()])
+            }
+            flux_view::LayoutTree::Col(c) => {
+                serde_json::json!(["col", c.iter().map(|t| go(editor, t)).collect::<Vec<_>>()])
+            }
+        }
+    }
+    go(editor, &editor.layout.tree())
+}
+
+/// A compact form of a layout for failure messages.
+fn show_layout(v: &Value) -> String {
+    match v[0].as_str() {
+        Some("leaf") => format!(
+            "{}{}[{}x{} c{},{} t{}{}]",
+            if v[6].as_bool() == Some(true) {
+                "*"
+            } else {
+                ""
+            },
+            v[1].as_str().unwrap_or(""),
+            v[2],
+            v[3],
+            v[4][0],
+            v[4][1],
+            v[5],
+            match v[7].as_u64() {
+                Some(0) | None => String::new(),
+                Some(n) => format!(" s{n}"),
+            }
+        ),
+        Some(kind) => format!(
+            "{kind}({})",
+            v[1].as_array()
+                .map(|c| c.iter().map(show_layout).collect::<Vec<_>>().join(" "))
+                .unwrap_or_default()
+        ),
+        None => v.to_string(),
+    }
+}
+
 fn pair(v: &Value) -> (usize, usize) {
     (
         v[0].as_u64().unwrap() as usize,
@@ -47,8 +124,25 @@ fn pair(v: &Value) -> (usize, usize) {
 fn run_case(case: &Value, expected: &Value) -> Vec<String> {
     let text = input_text(case);
     let mut editor = Editor::new(SCREEN.0, SCREEN.1);
-    // Loading from a file: the text is newline-terminated, like the oracle's temp file.
-    editor.set_text(&format!("{text}\n"));
+    let _dir = if case.get("layout").is_some() {
+        // Like the oracle: a directory holding `main.txt` and the case's other files, opened
+        // from that directory.
+        let dir = tempdir(case["id"].as_str().unwrap());
+        std::fs::write(dir.join("main.txt"), format!("{text}\n")).unwrap();
+        if let Some(files) = case.get("files").and_then(Value::as_object) {
+            for (name, contents) in files {
+                std::fs::write(dir.join(name), format!("{}\n", contents.as_str().unwrap()))
+                    .unwrap();
+            }
+        }
+        editor.cwd = dir.clone();
+        editor.open(std::path::Path::new("main.txt"));
+        Some(dir)
+    } else {
+        // Loading from a file: the text is newline-terminated, like the oracle's temp file.
+        editor.set_text(&format!("{text}\n"));
+        None
+    };
     // Neovim's cursor columns are byte offsets; a column inside a character means that
     // character.
     let (line, byte_col) = pair(&case["cur"]);
@@ -90,6 +184,16 @@ fn run_case(case: &Value, expected: &Value) -> Vec<String> {
     let want_top = expected["top"].as_u64().unwrap() as usize;
 
     let mut diffs = Vec::new();
+    if let Some(want) = expected.get("layout") {
+        let got = layout_json(&editor);
+        if &got != want {
+            diffs.push(format!(
+                "layout {}, want {}",
+                show_layout(&got),
+                show_layout(want)
+            ));
+        }
+    }
     // Registers the case asks about, as Vim's `getreg()` and `getregtype()` report them.
     if let Some(regs) = expected.get("regs").and_then(Value::as_object) {
         for (name, want) in regs {

@@ -260,7 +260,7 @@ impl Engine {
         let first = self.change.is_none();
         let shift = LineShift::of(editor.text(), &edit);
         editor.current_buffer_mut().marks.adjust(&shift);
-        editor.window.jumps.adjust(&shift);
+        editor.adjust_other_windows(&shift);
         if let Some(p) = editor.window.pcmark {
             editor.window.pcmark = shift.adjust(p).or(Some(p));
         }

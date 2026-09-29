@@ -14,11 +14,11 @@ use flux_view::{Editor, Mode};
 use flux_vim::{Engine, Key, KeyCode, Modifiers};
 use futures::StreamExt;
 
-const USAGE: &str = "usage: flux [file]";
+const USAGE: &str = "usage: flux [file ...]";
 
 #[allow(clippy::print_stdout)]
 fn main() -> Result<()> {
-    let mut file: Option<PathBuf> = None;
+    let mut files: Vec<PathBuf> = Vec::new();
     for arg in std::env::args_os().skip(1) {
         match arg.to_str() {
             Some("-h" | "--help") => {
@@ -30,16 +30,13 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             Some(s) if s.starts_with('-') && s != "-" => bail!("unknown option {s}\n{USAGE}"),
-            _ if file.is_some() => bail!("editing more than one file arrives with buffers (M3)"),
-            _ => file = Some(arg.into()),
+            _ => files.push(arg.into()),
         }
     }
 
     let (width, height) = crossterm::terminal::size()?;
     let mut editor = Editor::new(width.into(), height.into());
-    if let Some(path) = &file {
-        editor.open(path);
-    }
+    editor.open_args(&files);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -64,7 +61,7 @@ async fn run(mut editor: Editor) -> Result<()> {
             Mode::Visual => engine.visual_pending_keys(),
             _ => engine.pending_keys(),
         };
-        let showcmd: String = pending.iter().map(ToString::to_string).collect();
+        let showcmd: String = pending.iter().map(|k| k.showcmd()).collect();
         let cursor = flux_tui::draw(&editor, &showcmd, &mut grid);
         if cursor_mode != Some(editor.mode) {
             cursor_mode = Some(editor.mode);

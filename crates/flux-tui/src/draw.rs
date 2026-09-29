@@ -1,7 +1,9 @@
 //! Draws the editor into a grid: the window's text, the statusline and the command line.
 
 use flux_core::{GlyphKind, LineLayout, layout_line};
-use flux_view::{Cursor, Editor, MessageKind, Mode, VisualKind};
+use flux_view::{
+    Buffer, CMDLINE_ROWS, Cursor, Editor, MessageKind, Mode, Rect, VisualKind, Window,
+};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -15,10 +17,18 @@ const VISUAL: Style = Style {
     bg: Color::Ansi(8),
     ..Style::fg(Color::Reset)
 };
+/// Vim's StatusLine (the current window) and StatusLineNC (the others).
 const STATUS_LINE: Style = Style {
+    reverse: true,
+    bold: true,
+    ..Style::fg(Color::Reset)
+};
+const STATUS_LINE_NC: Style = Style {
     reverse: true,
     ..Style::fg(Color::Reset)
 };
+/// Vim's WinSeparator.
+const SEPARATOR: Style = Style::fg(Color::Reset);
 
 /// Vim's MoreMsg highlight.
 const MORE_MSG: Style = Style {
@@ -37,10 +47,21 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
     if width == 0 || height == 0 {
         return None;
     }
-    let text_rows = editor.window.height.min(height);
-    let mut cursor = draw_text(editor, grid, text_rows);
-    if height >= 2 {
-        draw_statusline(editor, grid, height - 2);
+    let mut cursor = None;
+    for (id, rect) in editor.window_rects() {
+        let pane = Pane {
+            editor,
+            win: editor.window_ref(id),
+            rect,
+        };
+        let pos = pane.draw_text(grid);
+        if pane.is_current() {
+            cursor = pos;
+        }
+        pane.draw_statusline(grid);
+        if rect.vsep {
+            pane.draw_separator(grid);
+        }
     }
     if let Some(pos) = draw_cmdline(editor, grid, height - 1) {
         cursor = Some(pos);
@@ -71,51 +92,232 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
     cursor
 }
 
-fn draw_text(editor: &Editor, grid: &mut Grid, text_rows: usize) -> Option<(usize, usize)> {
-    let win = &editor.window;
-    let text = &editor.current_buffer().text;
-    let mut cursor = None;
-    let mut row = 0;
-    let mut line = win.top;
-    while row < text_rows && line < text.line_count() {
-        let layout = layout_line(
-            &text.line_str(line),
-            editor.options.tabstop,
-            Some(win.width),
-        );
-        let fits = row + layout.row_count() <= text_rows;
-        if !fits && line != win.top {
-            // Vim's `display=lastline`: show what fits and mark the cut with `@@@`.
-            draw_rows(grid, &layout, row, text_rows - row);
-            for x in grid.width().saturating_sub(3)..grid.width() {
-                grid.set(x, text_rows - 1, "@", 1, NON_TEXT);
-            }
-            row = text_rows;
-            break;
-        }
-        let shown = layout.row_count().min(text_rows - row);
-        draw_rows(grid, &layout, row, shown);
-        if let Some((from, to)) = selected_columns(editor, line) {
-            highlight(grid, &layout, row, shown, from, to);
-        }
-        if line == win.cursor.line {
-            let (r, x) = layout.cursor_position(win.cursor.col, editor.mode == Mode::Insert);
-            if r < shown {
-                cursor = Some((x.min(grid.width() - 1), row + r));
-            }
-        }
-        row += shown;
-        line += 1;
-    }
-    for r in row..text_rows {
-        grid.set(0, r, "~", 1, NON_TEXT);
-    }
-    cursor
+/// One window and where it is on screen.
+struct Pane<'a> {
+    editor: &'a Editor,
+    win: &'a Window,
+    rect: Rect,
 }
 
-fn draw_rows(grid: &mut Grid, layout: &LineLayout, first_row: usize, count: usize) {
+impl Pane<'_> {
+    fn is_current(&self) -> bool {
+        self.win.id == self.editor.window.id
+    }
+
+    fn buffer(&self) -> &Buffer {
+        self.editor
+            .buffer(self.win.buffer)
+            .unwrap_or_else(|| self.editor.current_buffer())
+    }
+
+    /// The window's text rows, clipped to the grid.
+    fn text_rows(&self, grid: &Grid) -> usize {
+        self.rect
+            .height
+            .min(grid.height().saturating_sub(self.rect.row))
+    }
+
+    fn draw_text(&self, grid: &mut Grid) -> Option<(usize, usize)> {
+        let win = self.win;
+        let text = &self.buffer().text;
+        let (top_row, left) = (self.rect.row, self.rect.col);
+        let text_rows = self.text_rows(grid);
+        let width = self.rect.width;
+        let insert = self.is_current() && self.editor.mode == Mode::Insert;
+        let mut cursor = None;
+        let mut row = 0;
+        let mut line = win.top;
+        while row < text_rows && line < text.line_count() {
+            let mut layout = layout_line(
+                &text.line_str(line),
+                self.editor.options.tabstop,
+                Some(width),
+            );
+            // Rows of a too-tall top line scrolled off above the window (Vim's `w_skipcol`).
+            let skip = if line == win.top {
+                win.skip_rows().min(layout.row_count() - 1)
+            } else {
+                0
+            };
+            let full = layout.clone();
+            layout.rows.drain(..skip);
+            let fits = row + layout.row_count() <= text_rows;
+            if !fits && line != win.top {
+                // Vim's `display=lastline`: show what fits and mark the cut with `@@@`.
+                draw_rows(grid, &layout, left, top_row + row, text_rows - row);
+                for x in width.saturating_sub(3)..width {
+                    grid.set(left + x, top_row + text_rows - 1, "@", 1, NON_TEXT);
+                }
+                row = text_rows;
+                break;
+            }
+            let shown = layout.row_count().min(text_rows - row);
+            draw_rows(grid, &layout, left, top_row + row, shown);
+            if skip > 0 {
+                for x in 0..3.min(width) {
+                    grid.set(left + x, top_row + row, "<", 1, NON_TEXT);
+                }
+            }
+            if let Some((from, to)) = self.selected_columns(line) {
+                highlight(grid, &layout, left, width, top_row + row, shown, from, to);
+            }
+            if line == win.cursor.line {
+                let (r, x) = full.cursor_position(win.cursor.col, insert);
+                let r = r.wrapping_sub(skip);
+                if r < shown {
+                    cursor = Some((left + x.min(width.max(1) - 1), top_row + row + r));
+                }
+            }
+            row += shown;
+            line += 1;
+        }
+        for r in row..text_rows {
+            grid.set(left, top_row + r, "~", 1, NON_TEXT);
+        }
+        cursor
+    }
+
+    /// The selected chars of `line` as `[from, to)`, with `to` past the end when the line break
+    /// is selected too. Like Vim, every window showing the current buffer shows the selection.
+    fn selected_columns(&self, line: usize) -> Option<(usize, usize)> {
+        let editor = self.editor;
+        if editor.mode != Mode::Visual || self.win.buffer != editor.window.buffer {
+            return None;
+        }
+        let a = editor.visual.anchor;
+        let c = editor.window.cursor;
+        let (start, end) = if (c.line, c.col) < (a.line, a.col) {
+            (c, a)
+        } else {
+            (a, c)
+        };
+        if line < start.line || line > end.line {
+            return None;
+        }
+        let len = editor.current_buffer().text.line_len(line);
+        if editor.visual.kind == VisualKind::Line {
+            return Some((0, len.max(1)));
+        }
+        let from = if line == start.line { start.col } else { 0 };
+        let eol = editor.window.curswant == usize::MAX && c == end;
+        let to = if line == end.line && !eol {
+            end.col + 1
+        } else {
+            len + 1
+        };
+        Some((from, to))
+    }
+
+    /// Neovim's default statusline: `%<%f %h%w%m%r %=%-14.(%l,%c%V%) %P`. The cell below a
+    /// vertical separator belongs to the statusline when another one continues to its right.
+    fn draw_statusline(&self, grid: &mut Grid) {
+        let y = self.rect.row + self.rect.height;
+        if y >= grid.height().saturating_sub(CMDLINE_ROWS) {
+            return;
+        }
+        let style = if self.is_current() {
+            STATUS_LINE
+        } else {
+            STATUS_LINE_NC
+        };
+        let left = self.rect.col;
+        let width = self.rect.width;
+        for x in left..(left + width).min(grid.width()) {
+            grid.set(x, y, " ", 1, style);
+        }
+        if self.rect.vsep {
+            // The separator continues past the statusline unless another statusline follows.
+            if self.editor.stl_connected(self.win.id) {
+                grid.set(left + width, y, " ", 1, style);
+            } else {
+                grid.set(left + width, y, "│", 1, SEPARATOR);
+            }
+        }
+        let buffer = self.buffer();
+        let ruler = format!("{:<14} {}", self.cursor_ruler(), self.relative_position());
+        // `%f %h%w%m%r `: the name, a space, the flags and another space.
+        let flags = if buffer.modified() { "[+]" } else { "" };
+        let name = format!("{} {flags} ", buffer.name());
+        let (name_width, ruler_width) = (
+            UnicodeWidthStr::width(name.as_str()),
+            UnicodeWidthStr::width(ruler.as_str()),
+        );
+        if name_width + ruler_width <= width {
+            // `%=` pushes the ruler to the right edge.
+            grid.put_str_until(left, y, &name, style, left + width);
+            grid.put_str_until(left + width - ruler_width, y, &ruler, style, left + width);
+        } else {
+            // Too wide: `%<` at the start cuts the front off everything, marked with `<`.
+            let text = truncate_left(&format!("{name}{ruler}"), width);
+            grid.put_str_until(left, y, &text, style, left + width);
+        }
+    }
+
+    /// The `│` column to the right of the window.
+    fn draw_separator(&self, grid: &mut Grid) {
+        let x = self.rect.col + self.rect.width;
+        for r in 0..self.text_rows(grid) {
+            grid.set(x, self.rect.row + r, "│", 1, SEPARATOR);
+        }
+    }
+
+    /// `%l,%c%V`: line, byte column and, when different, screen column. An empty line is `0-1`.
+    fn cursor_ruler(&self) -> String {
+        let cursor = self.win.cursor;
+        let text = &self.buffer().text;
+        let line = text.line_str(cursor.line.min(text.line_count().saturating_sub(1)));
+        if line.is_empty() {
+            // A buffer with no lines at all shows line 0.
+            let n = if text.has_no_lines() {
+                0
+            } else {
+                cursor.line + 1
+            };
+            return format!("{n},0-1");
+        }
+        let byte_col = line
+            .char_indices()
+            .nth(cursor.col)
+            .map_or(line.len(), |(i, _)| i)
+            + 1;
+        let layout = layout_line(&line, self.editor.options.tabstop, None);
+        let insert = self.is_current() && self.editor.mode == Mode::Insert;
+        let screen_col = layout.cursor_position(cursor.col, insert).1 + 1;
+        if screen_col == byte_col {
+            format!("{},{byte_col}", cursor.line + 1)
+        } else {
+            format!("{},{byte_col}-{screen_col}", cursor.line + 1)
+        }
+    }
+
+    /// `%P`: `All`, `Top`, `Bot`, or how far down the window is.
+    fn relative_position(&self) -> String {
+        let buffer = self.buffer();
+        let win = self.win;
+        let metrics = flux_view::Metrics {
+            text: &buffer.text,
+            tabstop: self.editor.options.tabstop,
+            width: win.width,
+            height: win.height,
+        };
+        let above = win.top;
+        let below = buffer
+            .text
+            .line_count()
+            .saturating_sub(win.bottom(&metrics) + 1);
+        if below == 0 {
+            if above == 0 { "All" } else { "Bot" }.to_string()
+        } else if above == 0 {
+            "Top".to_string()
+        } else {
+            format!("{:>2}%", above * 100 / (above + below))
+        }
+    }
+}
+
+fn draw_rows(grid: &mut Grid, layout: &LineLayout, left: usize, first_row: usize, count: usize) {
     for (r, glyphs) in layout.rows.iter().take(count).enumerate() {
-        let mut x = 0;
+        let mut x = left;
         for glyph in glyphs {
             let style = match glyph.kind {
                 GlyphKind::Text | GlyphKind::Tab => Style::default(),
@@ -127,41 +329,14 @@ fn draw_rows(grid: &mut Grid, layout: &LineLayout, first_row: usize, count: usiz
     }
 }
 
-/// The selected chars of `line` as `[from, to)`, with `to` past the end when the line break
-/// is selected too.
-fn selected_columns(editor: &Editor, line: usize) -> Option<(usize, usize)> {
-    if editor.mode != Mode::Visual {
-        return None;
-    }
-    let a = editor.visual.anchor;
-    let c = editor.window.cursor;
-    let (start, end) = if (c.line, c.col) < (a.line, a.col) {
-        (c, a)
-    } else {
-        (a, c)
-    };
-    if line < start.line || line > end.line {
-        return None;
-    }
-    let len = editor.current_buffer().text.line_len(line);
-    if editor.visual.kind == VisualKind::Line {
-        return Some((0, len.max(1)));
-    }
-    let from = if line == start.line { start.col } else { 0 };
-    let eol = editor.window.curswant == usize::MAX && c == end;
-    let to = if line == end.line && !eol {
-        end.col + 1
-    } else {
-        len + 1
-    };
-    Some((from, to))
-}
-
 /// Paint the selection's background over already drawn glyphs; a selected line break shows as
 /// one highlighted cell after the text.
+#[allow(clippy::too_many_arguments)]
 fn highlight(
     grid: &mut Grid,
     layout: &LineLayout,
+    left: usize,
+    width: usize,
     first_row: usize,
     rows: usize,
     from: usize,
@@ -172,13 +347,13 @@ fn highlight(
         let mut x = 0;
         for glyph in glyphs {
             if glyph.char_idx >= from && glyph.char_idx < to {
-                let cell = grid.cell(x, first_row + r).clone();
+                let cell = grid.cell(left + x, first_row + r).clone();
                 if cell.width > 0 {
                     let style = Style {
                         bg: VISUAL.bg,
                         ..cell.style
                     };
-                    grid.set(x, first_row + r, &cell.symbol, cell.width, style);
+                    grid.set(left + x, first_row + r, &cell.symbol, cell.width, style);
                 }
             }
             x += usize::from(glyph.width);
@@ -192,8 +367,8 @@ fn highlight(
         .map(|g| g.char_idx + 1)
         .max()
         .unwrap_or(0);
-    if to > len && from <= len && end_cell.1 < grid.width() {
-        grid.set(end_cell.1, end_cell.0, " ", 1, VISUAL);
+    if to > len && from <= len && end_cell.1 < width {
+        grid.set(left + end_cell.1, end_cell.0, " ", 1, VISUAL);
     }
 }
 
@@ -216,77 +391,6 @@ fn selection_size(editor: &Editor) -> String {
         chars.to_string()
     } else {
         format!("{chars}-{bytes}")
-    }
-}
-
-/// Neovim's default statusline: `%<%f %h%w%m%r%=%-14.(%l,%c%V%) %P`.
-fn draw_statusline(editor: &Editor, grid: &mut Grid, y: usize) {
-    grid.fill_row(y, STATUS_LINE);
-    let buffer = editor.current_buffer();
-    let ruler = format!("{:<14} {}", cursor_ruler(editor), relative_position(editor));
-    let ruler_width = ruler.chars().count();
-    let name_room = grid.width().saturating_sub(ruler_width + 1);
-    // `%<%f %h%w%m%r`: the name, a space, then flags; truncated from the start as one piece.
-    let flags = if buffer.modified() { "[+]" } else { "" };
-    let name = truncate_left(&format!("{} {flags}", buffer.name()), name_room);
-    grid.put_str(0, y, &name, STATUS_LINE);
-    grid.put_str(
-        grid.width().saturating_sub(ruler_width),
-        y,
-        &ruler,
-        STATUS_LINE,
-    );
-}
-
-/// `%l,%c%V`: line, byte column and, when different, screen column. An empty line is `0-1`.
-fn cursor_ruler(editor: &Editor) -> String {
-    let cursor = editor.window.cursor;
-    let text = &editor.current_buffer().text;
-    let line = text.line_str(cursor.line);
-    if line.is_empty() {
-        // A buffer with no lines at all shows line 0.
-        let n = if text.has_no_lines() {
-            0
-        } else {
-            cursor.line + 1
-        };
-        return format!("{n},0-1");
-    }
-    let byte_col = line
-        .char_indices()
-        .nth(cursor.col)
-        .map_or(line.len(), |(i, _)| i)
-        + 1;
-    let layout = layout_line(&line, editor.options.tabstop, None);
-    let screen_col = layout
-        .cursor_position(cursor.col, editor.mode == Mode::Insert)
-        .1
-        + 1;
-    if screen_col == byte_col {
-        format!("{},{byte_col}", cursor.line + 1)
-    } else {
-        format!("{},{byte_col}-{screen_col}", cursor.line + 1)
-    }
-}
-
-/// `%P`: `All`, `Top`, `Bot`, or how far down the window is.
-fn relative_position(editor: &Editor) -> String {
-    let buffer = editor.current_buffer();
-    let win = &editor.window;
-    let metrics = flux_view::Metrics {
-        text: &buffer.text,
-        tabstop: editor.options.tabstop,
-        width: win.width,
-        height: win.height,
-    };
-    let above = win.top;
-    let below = buffer.text.line_count() - win.bottom(&metrics) - 1;
-    if below == 0 {
-        if above == 0 { "All" } else { "Bot" }.to_string()
-    } else if above == 0 {
-        "Top".to_string()
-    } else {
-        format!("{:>2}%", above * 100 / (above + below))
     }
 }
 
@@ -340,15 +444,24 @@ fn truncate_middle(s: &str, room: usize) -> String {
 
 /// Keep the end of `s`, as Vim's `%<` does, marking the cut with `<`.
 fn truncate_left(s: &str, room: usize) -> String {
-    let len = s.chars().count();
-    if len <= room {
+    if UnicodeWidthStr::width(s) <= room {
         return s.to_owned();
     }
     if room == 0 {
         return String::new();
     }
-    let tail: String = s.chars().skip(len - room + 1).collect();
-    format!("<{tail}")
+    let mut tail: Vec<&str> = Vec::new();
+    let mut used = 1;
+    for g in s.graphemes(true).rev() {
+        let w = UnicodeWidthStr::width(g);
+        if used + w > room {
+            break;
+        }
+        tail.push(g);
+        used += w;
+    }
+    tail.reverse();
+    format!("<{}", tail.concat())
 }
 
 fn draw_cmdline(editor: &Editor, grid: &mut Grid, y: usize) -> Option<(usize, usize)> {
@@ -527,6 +640,59 @@ mod tests {
         let (rows, cursor) = render(&editor);
         assert_eq!(rows[5], ":q");
         assert_eq!(cursor, Some((2, 5)));
+    }
+
+    #[test]
+    fn split_windows_have_separators_and_statuslines() {
+        let mut editor = Editor::new(80, 24);
+        editor.set_text("alpha 1\nalpha 2\n");
+        editor.split(false, None);
+        editor.split(true, None);
+        let (rows, cursor) = render(&editor);
+        assert_eq!(rows[0], format!("{:<40}│alpha 1", "alpha 1"));
+        assert_eq!(rows[2], format!("{:<40}│~", "~"));
+        // Side by side statuslines join below the separator.
+        assert_eq!(
+            rows[11],
+            format!(
+                "{:<22}{:<14} All {:<21}{:<14} All",
+                "[No Name]", "1,1", "[No Name]", "1,1"
+            )
+        );
+        assert_eq!(rows[12], "alpha 1");
+        assert_eq!(rows[22], format!("{:<62}{:<14} All", "[No Name]", "1,1"));
+        assert_eq!(cursor, Some((0, 0)));
+    }
+
+    #[test]
+    fn separator_continues_past_a_statusline_above_another_window() {
+        let mut editor = Editor::new(80, 24);
+        editor.set_text("x\n");
+        editor.split(true, None);
+        editor.split(false, None);
+        let (rows, _) = render(&editor);
+        // The left column is split: its top statusline has the separator beside it.
+        assert_eq!(rows[11].chars().nth(40), Some('│'));
+        assert_eq!(rows[22].chars().nth(40), Some(' '));
+    }
+
+    #[test]
+    fn narrow_statusline_keeps_its_end() {
+        let mut editor = Editor::new(80, 24);
+        editor.set_text("x\n");
+        editor.split(true, Some(10));
+        let (rows, _) = render(&editor);
+        assert_eq!(&rows[22][..10], "<      All");
+    }
+
+    #[test]
+    fn partly_shown_top_line_is_marked() {
+        let mut editor = Editor::new(20, 6);
+        editor.set_text(&format!("{}\n", "x".repeat(100)));
+        editor.with_window(|w, m| w.set_cursor(0, 99, m));
+        let (rows, cursor) = render(&editor);
+        assert_eq!(rows[0], format!("<<<{}", "x".repeat(17)));
+        assert_eq!(cursor, Some((19, 3)));
     }
 
     #[test]

@@ -93,7 +93,7 @@ joining comment lines ('formatoptions' `j`), `%` skipping brackets in quotes, un
 changes older than 100 seconds (Vim shows a clock time), and swap files. Saving replaces the file
 with a new one, so hard links to it are not updated.
 
-## M2: Visual mode, text objects, registers ✅ (awaiting manual check)
+## M2: Visual mode, text objects, registers ✅
 
 - Visual mode `v` / `V`: every motion, `o`, `gv`, switching kinds, counts; operators `d x c s
   y > < ~ u U J gJ r`, the linewise `D X C S R Y`, and `p` / `P` replacing the selection (`p`
@@ -136,7 +136,54 @@ Fixed along the way: a crash when deleting every line from far down a long file 
 Known gaps: visual-block mode (`CTRL-V`), `:normal` and `:g` (all later); sentence objects
 (`is`/`as`) and `(`/`)`; clipboard registers `"+`/`"*` (M7); marks on other files (M3).
 
-## M3: Windows and buffers
+## M3: Windows and buffers ✅ (awaiting manual check)
+
+- Windows: `:sp [file]`, `:vs [file]`, `:new`, `:vnew`, with a size (`:5sp`, `5:sp`) and the
+  `:vert[ical]` modifier; `:close` (E444), `:only`, `:q` closing a window, `:resize [+-]N`,
+  `:vertical resize N`. `CTRL-W` with `s S v n ^ c q o w W p t b h j k l` (and arrows), `+ - _`
+  `< > |` and `=` with counts, `x`, `r R`, and `H J K L` to move a window to an edge.
+- The layout is Vim's frame tree, ported from `window.c`: 'equalalways' sizing, the room check
+  for a new window (E36), 'winheight'/'winwidth' applied to the window entered, closed windows
+  giving their space to a neighbour, `CTRL-W x`/`r` keeping each window's size, and terminal
+  resizes spread over the windows.
+- Each window has its own statusline (the current one bold) and `│` separators, drawn like
+  Neovim's default statusline, including how it is cut short in narrow windows.
+- Buffers: 'hidden' behaviour, several files on the command line (the argument list, with
+  `E173: N more files to edit` on the first `:q`), `:e #` and `CTRL-^` / `N CTRL-^`, `:b N` /
+  `:b name` (E86, E93, E94), `:bn :bN :bp :bf :br :bl` with counts, `:bd[!]` / `:bw[!]` by
+  number or name (E89), `:enew`, `:ls` / `:buffers` / `:files` with Neovim's flags and line
+  numbers. Each window remembers where its cursor was in every buffer.
+- Marks `A`–`Z` jump to other files; the jumplist crosses files; `:jumps` shows file names.
+- `zt zz zb`, `z<CR> z. z-` with counts. `CTRL-D`/`CTRL-U`/`CTRL-F`/`CTRL-B` are now ported
+  from Neovim's `pagescroll` (counts included: `N CTRL-D` sets 'scroll'), and a line taller than
+  its window scrolls within itself so the cursor stays visible, marked `<<<` like Neovim.
+- A count before `:` fills in a range (`3:` → `:.,.+2`); addresses `.`, `$`, `%`, numbers, marks
+  and `+N`/`-N` work as counts and for `:N`. `:qa` now quits with any number of windows and
+  `:q!` still refuses when a hidden buffer has changes, as in Vim. showcmd shows `^W`.
+
+Verified: all 723 M0–M3 oracle cases match Neovim 0.12.5 (175 new, now including every
+window's size, cursor, top line and `skipcol`), 18 multi-window key sequences produce screens
+identical to `nvim --clean`, and the 126 earlier sequences still do. One known difference:
+after `CTRL-D` in a split, Neovim sometimes leaves its terminal cursor a row above the cursor
+line until the next key; flux draws it on the cursor line.
+
+### Manual check
+
+Run `flux file1 file2 file3` (ideally next to `nvim --clean file1 file2 file3`):
+
+1. `:sp`, `:vs`, `CTRL-W s/v`, then move around with `CTRL-W h/j/k/l/w/p`. Resize with
+   `CTRL-W +/-/</>/_/|/=` and `:resize`; resize the terminal too.
+2. Edit the same buffer in two windows: both update, and each keeps its own cursor and scroll.
+3. `:e file2`, `CTRL-^`, `:ls`, `:b 3`, `:bn`/`:bp`, `:bd`. Leave a buffer modified and switch
+   away (allowed with 'hidden'), then try `:q` in the last window.
+4. `CTRL-W x`, `r`, `H J K L`, `:only`, `:close`, `:q` until one window is left; `:q` warns
+   about files not yet edited (E173) and quits on the second try.
+5. `mA` in one file, `'A` from another; `CTRL-O` back across files.
+6. A small window (`:resize 3`) over a file with very long lines: `$`, `j`/`k`, `CTRL-D`/`U`/`F`/`B`.
+
+Known gaps: tab pages, `:sb`/`:sball`, `:args`/`:next`/`:prev` (the argument list only
+affects `:q`), `'splitbelow'`/`'splitright'` and other options (`:set` is M4), `CTRL-W f`,
+`CTRL-W ]`, and the mouse.
 
 ## M4: Search and Ex
 

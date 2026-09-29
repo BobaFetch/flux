@@ -36,6 +36,23 @@ impl Engine {
             visual: None,
         };
         let done = match action {
+            Action::Move(motion::Motion::Mark { name, exact })
+                if self.mark_in_other_buffer(editor, name) =>
+            {
+                // A global mark in another file: switch to it, then go to the mark.
+                let (buffer, p) = editor.global_marks[&name];
+                editor.show_buffer(buffer);
+                let line = p.line.min(editor.text().last_line());
+                let col = if exact {
+                    p.col
+                } else {
+                    util::first_non_blank(&util::line(editor, line))
+                };
+                editor.window.cursor = pos(line, col);
+                normalize_cursor(editor);
+                set_want(editor, Want::Column);
+                true
+            }
             Action::Move(m) => match self.motion(editor, m, count, Pending::None) {
                 Some(t) => {
                     self.remember_find(m);
@@ -116,7 +133,15 @@ impl Engine {
             Action::Undo => self.undo(editor, count.unwrap_or(1), false),
             Action::Redo => self.undo(editor, count.unwrap_or(1), true),
             Action::Repeat => self.repeat(editor, count),
-            Action::CmdLine => self.enter_cmdline(editor),
+            Action::CmdLine => {
+                self.enter_cmdline(editor);
+                // A count becomes a range of that many lines, as in Vim.
+                match count {
+                    Some(1) => editor.cmdline.push('.'),
+                    Some(n) => editor.cmdline.push_str(&format!(".,.+{}", n - 1)),
+                    None => {}
+                }
+            }
             Action::Scroll(s) => scroll(editor, s, count),
             Action::FileInfo => file_info(editor),
             Action::WriteQuit => ex::execute(editor, "x"),
@@ -126,6 +151,10 @@ impl Engine {
                 let cur = editor.cursor();
                 match name {
                     '\'' | '`' => set_pcmark(editor),
+                    'A'..='Z' => {
+                        let buffer = editor.window.buffer;
+                        editor.global_marks.insert(name, (buffer, cur));
+                    }
                     _ => editor.current_buffer_mut().marks.set(name, cur),
                 }
             }
@@ -134,11 +163,21 @@ impl Engine {
             Action::Execute(name) => self.execute_register(editor, name, count.unwrap_or(1)),
             Action::Jump { older } => {
                 let n = count.unwrap_or(1) as isize;
-                let cur = editor.cursor();
-                match editor.window.jumps.jump(if older { n } else { -n }, cur) {
-                    Some(p) => {
-                        let line = p.line.min(editor.text().last_line());
-                        editor.window.cursor = pos(line, p.col);
+                let here = flux_view::Jump {
+                    buffer: editor.window.buffer,
+                    pos: editor.cursor(),
+                };
+                match editor.window.jumps.jump(if older { n } else { -n }, here) {
+                    Some(j) => {
+                        if j.buffer != editor.window.buffer {
+                            if editor.buffer(j.buffer).is_none() {
+                                self.failed = true;
+                                return;
+                            }
+                            editor.switch_buffer(j.buffer, false);
+                        }
+                        let line = j.pos.line.min(editor.text().last_line());
+                        editor.window.cursor = pos(line, j.pos.col);
                         normalize_cursor(editor);
                         set_want(editor, Want::Column);
                     }
@@ -146,6 +185,28 @@ impl Engine {
                 }
             }
             Action::Visual(kind) => self.start_visual(editor, kind),
+            Action::Window(cmd) => self.window_command(editor, cmd, count),
+            Action::AlternateBuffer => self.alternate_buffer(editor, count),
+            Action::ScrollCursor {
+                at,
+                first_non_blank,
+            } => {
+                if let Some(n) = count {
+                    let line = n.max(1) - 1;
+                    editor.with_window(|w, m| w.set_cursor_line(line, m));
+                }
+                if first_non_blank {
+                    let line = editor.cursor().line;
+                    editor.window.cursor.col = util::first_non_blank(&util::line(editor, line));
+                    set_want(editor, Want::Column);
+                }
+                let at = match at {
+                    crate::parse::ScreenPos::Top => 't',
+                    crate::parse::ScreenPos::Middle => 'z',
+                    crate::parse::ScreenPos::Bottom => 'b',
+                };
+                editor.with_window(|w, m| w.scroll_cursor_to(at, m));
+            }
             Action::Reselect => self.reselect(editor),
             Action::InsertAtLastInsert => {
                 if let Some(p) = editor.current_buffer().marks.get('^') {
@@ -816,7 +877,21 @@ pub(crate) fn normalize_cursor(editor: &mut Editor) {
 pub(crate) fn set_pcmark(editor: &mut Editor) {
     let cur = editor.cursor();
     editor.window.pcmark = Some(cur);
-    editor.window.jumps.push(cur);
+    let buffer = editor.window.buffer;
+    editor
+        .window
+        .jumps
+        .push(flux_view::Jump { buffer, pos: cur });
+}
+
+impl Engine {
+    fn mark_in_other_buffer(&self, editor: &Editor, name: char) -> bool {
+        name.is_ascii_uppercase()
+            && editor
+                .global_marks
+                .get(&name)
+                .is_some_and(|&(b, _)| b != editor.window.buffer)
+    }
 }
 
 /// Vim's E20 for jumping to a mark that isn't set.
@@ -847,10 +922,10 @@ fn scroll(editor: &mut Editor, s: Scroll, count: Option<usize>) {
         match s {
             Scroll::LinesDown => win.scroll_lines_down(count.unwrap_or(1), m),
             Scroll::LinesUp => win.scroll_lines_up(count.unwrap_or(1), m),
-            Scroll::HalfDown => win.scroll_half_down(m),
-            Scroll::HalfUp => win.scroll_half_up(m),
-            Scroll::PageDown => win.page_down(m),
-            Scroll::PageUp => win.page_up(m),
+            Scroll::HalfDown => win.scroll_half_down(count, m),
+            Scroll::HalfUp => win.scroll_half_up(count, m),
+            Scroll::PageDown => win.page_down(count, m),
+            Scroll::PageUp => win.page_up(count, m),
         };
     });
 }

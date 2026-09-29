@@ -27,20 +27,57 @@ local function case_lines(case)
 end
 
 local function feed(keys)
-  local codes = vim.api.nvim_replace_termcodes(keys, true, false, true)
+  local codes = vim.api.nvim_replace_termcodes(keys, true, true, true)
   pcall(vim.api.nvim_feedkeys, codes, "xt", false)
   vim.cmd("redraw")
 end
 
+-- The window layout, for cases that ask (`"layout": true`): Neovim's `winlayout()` with each
+-- window's buffer, size, cursor, top line and columns of the top line scrolled off.
+local function layout()
+  local function node(n)
+    if n[1] == "leaf" then
+      local w = n[2]
+      local pos = vim.api.nvim_win_get_cursor(w)
+      local info = vim.fn.getwininfo(w)[1]
+      return {
+        "leaf",
+        vim.fn.fnamemodify(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w)), ":t"),
+        vim.api.nvim_win_get_height(w),
+        vim.api.nvim_win_get_width(w),
+        { pos[1] - 1, pos[2] },
+        info.topline - 1,
+        w == vim.api.nvim_get_current_win(),
+        vim.api.nvim_win_call(w, vim.fn.winsaveview).skipcol,
+      }
+    end
+    local children = {}
+    for _, c in ipairs(n[2]) do
+      children[#children + 1] = node(c)
+    end
+    return { n[1], children }
+  end
+  return node(vim.fn.winlayout())
+end
+
 local out = {}
-local tmp = vim.fn.tempname() .. ".txt"
-for _, case in ipairs(cases) do
+local root = vim.fn.tempname()
+for i, case in ipairs(cases) do
+  -- Each case gets its own directory holding `main.txt` and any extra files it names.
+  local dir = root .. "/" .. i
+  vim.fn.mkdir(dir, "p")
+  local tmp = dir .. "/main.txt"
   local input = case_lines(case)
   vim.fn.writefile(input, tmp)
+  for name, contents in pairs(case.files or {}) do
+    vim.fn.writefile(vim.split(contents, "\n", { plain = true }), dir .. "/" .. name)
+  end
+  vim.cmd("silent! only!")
   vim.cmd("silent! %bwipeout!")
+  vim.cmd("cd " .. vim.fn.fnameescape(dir))
   -- Start each case like a fresh `:edit`, which puts line 1 in the jumplist.
   vim.cmd("clearjumps")
-  vim.cmd("silent edit! " .. vim.fn.fnameescape(tmp))
+  vim.cmd("silent edit! main.txt")
   for _, r in ipairs({ '"', "a", "b", "q", "0", "1", "2", "3", "-" }) do
     vim.fn.setreg(r, "")
   end
@@ -55,9 +92,11 @@ for _, case in ipairs(cases) do
   feed("<Esc>")
 
   local pos = vim.api.nvim_win_get_cursor(0)
+  local lay = case.layout and layout() or nil
+  local bufname = case.layout and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t") or nil
   local text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
   -- Generated inputs are long; only record their text if the keys changed it.
-  if case.gen and text == table.concat(input, "\n") then
+  if (case.gen or case.layout) and text == table.concat(input, "\n") then
     text = nil
   end
   -- Registers the case asks about: contents and type (`v`, `V`, or `^V{width}`).
@@ -74,6 +113,8 @@ for _, case in ipairs(cases) do
     cur = { pos[1] - 1, pos[2] },
     top = vim.fn.line("w0") - 1,
     regs = regs,
+    layout = lay,
+    buf = bufname,
   }
 end
 vim.fn.writefile({ vim.json.encode(out) }, arg[2])

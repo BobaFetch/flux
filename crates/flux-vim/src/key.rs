@@ -180,6 +180,28 @@ fn parse_special(inner: &str) -> Option<Key> {
     Some(Key::new(code, mods))
 }
 
+impl Key {
+    /// How 'showcmd' shows the key: control characters as `^X` (Vim's `transchar`), a space as
+    /// itself, other special keys by name.
+    pub fn showcmd(&self) -> String {
+        let ctrl_only = Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        };
+        match (self.code, self.mods) {
+            (KeyCode::Char(' '), m) if m == Modifiers::NONE => " ".into(),
+            (KeyCode::Char(c), m) if m == Modifiers::NONE => c.to_string(),
+            (KeyCode::Char(c), m) if m == ctrl_only && matches!(c, '@'..='_' | 'a'..='z') => {
+                format!("^{}", c.to_ascii_uppercase())
+            }
+            (KeyCode::Enter, m) if m == Modifiers::NONE => "^M".into(),
+            (KeyCode::Tab, m) if m == Modifiers::NONE => "^I".into(),
+            (KeyCode::Esc, m) if m == Modifiers::NONE => "^[".into(),
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self.code {
