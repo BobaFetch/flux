@@ -11,7 +11,21 @@ const CHROME_ROWS: usize = 2;
 pub enum Mode {
     Normal,
     Insert,
+    Visual,
     CmdLine,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualKind {
+    Char,
+    Line,
+}
+
+/// The Visual selection: from `anchor` to the cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Visual {
+    pub anchor: Cursor,
+    pub kind: VisualKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +89,11 @@ pub struct Editor {
     pub hit_enter: bool,
     /// A Normal-mode command is being typed with `CTRL-O` from Insert mode.
     pub insert_pending: bool,
+    pub visual: Visual,
+    /// The register a macro is being recorded into (`qa`).
+    pub recording: Option<char>,
+    /// Counts errors reported, so a running macro can stop at the first one.
+    pub error_count: u64,
     pub quit: bool,
     screen_width: usize,
     screen_height: usize,
@@ -94,6 +113,12 @@ impl Editor {
             registers: Registers::default(),
             hit_enter: false,
             insert_pending: false,
+            visual: Visual {
+                anchor: Cursor::default(),
+                kind: VisualKind::Char,
+            },
+            recording: None,
+            error_count: 0,
             quit: false,
             screen_width: 0,
             screen_height: 0,
@@ -110,8 +135,17 @@ impl Editor {
             Ok(buffer) => self.buffers[id.0] = buffer,
             Err(e) => self.error(format!("\"{}\" {e}", path.display())),
         }
+        self.reset_view();
+    }
+
+    /// Start at the top of a freshly loaded buffer. Like Vim's `:edit`, that position goes in
+    /// the jumplist, and `'"` (last position in the file) starts at the top too.
+    fn reset_view(&mut self) {
         self.window.cursor = Default::default();
         self.window.top = 0;
+        self.window.pcmark = Some(Cursor::default());
+        self.window.jumps.push(Cursor::default());
+        self.current_buffer_mut().marks.set('"', Cursor::default());
     }
 
     /// Replace the current buffer's text, as if it had been loaded, and reset the view.
@@ -119,8 +153,7 @@ impl Editor {
         let id = self.window.buffer;
         self.buffers[id.0].text = Text::new(text);
         self.buffers[id.0].history = Default::default();
-        self.window.cursor = Default::default();
-        self.window.top = 0;
+        self.reset_view();
     }
 
     pub fn screen_size(&self) -> (usize, usize) {
@@ -248,6 +281,19 @@ impl Editor {
     /// An error message. One that doesn't fit on the command line wraps, and waits for a key
     /// like any multi-line message.
     pub fn error(&mut self, text: impl Into<String>) {
+        self.error_count += 1;
         self.show(text.into(), MessageKind::Error);
+    }
+
+    /// Register contents, including the read-only `"%` (the file name).
+    pub fn register(&self, name: Option<char>) -> Option<crate::Register> {
+        if name == Some('%') {
+            let path = self.current_buffer().path.as_ref()?;
+            return Some(crate::Register::new(
+                path.display().to_string(),
+                crate::RegisterKind::Char,
+            ));
+        }
+        self.registers.get(name).cloned()
     }
 }

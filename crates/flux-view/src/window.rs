@@ -34,6 +34,9 @@ pub struct Window {
     /// there (Vim's `w_fraction` and `w_prev_fraction_row`).
     fraction: usize,
     fraction_row: Option<usize>,
+    pub jumps: crate::JumpList,
+    /// Where the last jump came from (the `''` mark).
+    pub pcmark: Option<Cursor>,
 }
 
 /// Vim's fixed-point scale for `w_fraction`.
@@ -130,6 +133,8 @@ impl Window {
             height,
             fraction: 0,
             fraction_row: None,
+            jumps: Default::default(),
+            pcmark: None,
         }
     }
 
@@ -207,7 +212,7 @@ impl Window {
     /// Last line shown completely.
     pub fn bottom(&self, m: &Metrics) -> usize {
         let mut used = 0;
-        let mut line = self.top;
+        let mut line = self.top.min(m.last_line());
         loop {
             used += m.rows(line);
             if used > self.height {
@@ -251,6 +256,9 @@ impl Window {
     /// Scroll so the cursor line is visible, the way Vim does after a cursor move: a short
     /// distance scrolls just enough, a long one puts the cursor in the middle.
     pub fn scroll_to_cursor(&mut self, m: &Metrics) {
+        // Lines may have been deleted since the view was last placed.
+        self.top = self.top.min(m.last_line());
+        self.cursor.line = self.cursor.line.min(m.last_line());
         let cur = self.cursor.line;
         let h = self.height;
         if cur < self.top {
@@ -702,6 +710,15 @@ mod tests {
         assert_eq!(pos(&w), (20, 20));
         w.set_height(&resized(22));
         assert_eq!(pos(&w), (19, 20));
+    }
+
+    #[test]
+    fn view_recovers_when_lines_below_it_are_deleted() {
+        let mut w = win(90, 100);
+        let text = numbered(3);
+        let m = metrics(&text);
+        w.scroll_to_cursor(&m);
+        assert!(w.top <= 2 && w.cursor.line == 2, "{:?}", pos(&w));
     }
 
     #[test]

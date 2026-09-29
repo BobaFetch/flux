@@ -9,10 +9,12 @@ on:
     paths:
       - crates/flux-vim/tests/oracle/**
       - xtask/**
+      - .github/workflows/oracle.yml
   pull_request:
     paths:
       - crates/flux-vim/tests/oracle/**
       - xtask/**
+      - .github/workflows/oracle.yml
   workflow_dispatch:
 
 concurrency:
@@ -23,7 +25,7 @@ jobs:
   oracle:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: rhysd/action-setup-vim@v1
         with:
           neovim: true

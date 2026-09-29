@@ -60,16 +60,16 @@ async fn run(mut editor: Editor) -> Result<()> {
     loop {
         let (width, height) = editor.screen_size();
         let mut grid = Grid::new(width, height);
-        let showcmd: String = engine
-            .pending_keys()
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let pending = match editor.mode {
+            Mode::Visual => engine.visual_pending_keys(),
+            _ => engine.pending_keys(),
+        };
+        let showcmd: String = pending.iter().map(ToString::to_string).collect();
         let cursor = flux_tui::draw(&editor, &showcmd, &mut grid);
         if cursor_mode != Some(editor.mode) {
             cursor_mode = Some(editor.mode);
             let style = match editor.mode {
-                Mode::Normal => SetCursorStyle::SteadyBlock,
+                Mode::Normal | Mode::Visual => SetCursorStyle::SteadyBlock,
                 Mode::Insert | Mode::CmdLine => SetCursorStyle::SteadyBar,
             };
             queue!(out, style)?;

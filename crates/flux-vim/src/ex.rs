@@ -78,6 +78,31 @@ const COMMANDS: &[Command] = &[
         min_len: 6,
         run: checktime,
     },
+    Command {
+        name: "registers",
+        min_len: 3,
+        run: registers,
+    },
+    Command {
+        name: "display",
+        min_len: 2,
+        run: registers,
+    },
+    Command {
+        name: "marks",
+        min_len: 5,
+        run: marks,
+    },
+    Command {
+        name: "delmarks",
+        min_len: 4,
+        run: delmarks,
+    },
+    Command {
+        name: "jumps",
+        min_len: 2,
+        run: jumps,
+    },
 ];
 
 pub fn execute(editor: &mut Editor, line: &str) {
@@ -221,6 +246,189 @@ fn checktime(editor: &mut Editor, _bang: bool, args: &str) {
     if no_args(editor, args) {
         editor.check_time();
     }
+}
+
+/// Vim's display of text in lists: control characters as `^X`, line breaks as `^J`.
+fn printable(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("^J"),
+            '\x7f' => out.push_str("^?"),
+            c if (c as u32) < 0x20 => {
+                out.push('^');
+                out.push(char::from(c as u8 + 64));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Cut `s` to `width` cells.
+fn fit(s: &str, width: usize) -> String {
+    let mut used = 0;
+    let mut out = String::new();
+    for c in s.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+        if used + w > width {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out
+}
+
+/// Show a list the way Vim does: the command that asked for it, then the lines, then the
+/// hit-enter prompt.
+fn show_list(editor: &mut Editor, command: &str, lines: Vec<String>) {
+    editor.full_message(format!(":{command}\n{}", lines.join("\n")));
+    editor.hit_enter = true;
+}
+
+/// `:registers [names]`, `:display`.
+fn registers(editor: &mut Editor, _bang: bool, args: &str) {
+    let width = editor.screen_size().0.max(20);
+    let mut lines = vec!["Type Name Content".to_string()];
+    for name in "\"0123456789abcdefghijklmnopqrstuvwxyz-.:%".chars() {
+        if !args.is_empty() && !args.contains(name) {
+            continue;
+        }
+        let Some(reg) = editor.register(Some(name)) else {
+            continue;
+        };
+        if reg.text.is_empty() {
+            continue;
+        }
+        let (kind, text) = match reg.kind {
+            flux_view::RegisterKind::Char => ('c', reg.text.clone()),
+            flux_view::RegisterKind::Line => ('l', format!("{}\n", reg.text)),
+            flux_view::RegisterKind::Block => ('b', reg.text.clone()),
+        };
+        let line = format!("  {kind}  \"{name}   {}", printable(&text));
+        lines.push(fit(&line, width - 1));
+    }
+    let command = if args.is_empty() {
+        "reg".to_string()
+    } else {
+        format!("reg {args}")
+    };
+    show_list(editor, &command, lines);
+}
+
+/// The text shown after a mark or jump: the line without its indent, cut to fit after a
+/// `lead`-wide prefix.
+fn mark_text(editor: &Editor, line: usize, lead: usize) -> String {
+    if line > editor.text().last_line() {
+        return String::new();
+    }
+    let text = editor.text().line_str(line);
+    // Vim's `mark_line` keeps the text narrower than `Columns - lead`.
+    let width = editor.screen_size().0.max(lead + 2);
+    fit(
+        &printable(text.trim_start_matches([' ', '\t'])),
+        width - lead - 1,
+    )
+}
+
+/// A mark's column as Vim shows it: in bytes, with MAXCOL for "end of line".
+fn byte_col(editor: &Editor, p: flux_view::Cursor) -> usize {
+    if p.col == usize::MAX {
+        return 2147483647;
+    }
+    if p.line > editor.text().last_line() {
+        return p.col;
+    }
+    editor
+        .text()
+        .line_str(p.line)
+        .chars()
+        .take(p.col)
+        .map(char::len_utf8)
+        .sum()
+}
+
+/// `:marks [names]`.
+fn marks(editor: &mut Editor, _bang: bool, args: &str) {
+    let mut list: Vec<(char, flux_view::Cursor)> = Vec::new();
+    if let Some(p) = editor.window.pcmark {
+        list.push(('\'', p));
+    }
+    let marks = editor.current_buffer().marks.clone();
+    for name in ('a'..='z').chain('A'..='Z').chain("\"[]^.<>".chars()) {
+        if let Some(p) = marks.get(name) {
+            list.push((name, p));
+        }
+    }
+    let mut lines = vec!["mark line  col file/text".to_string()];
+    for (name, p) in list {
+        if !args.is_empty() && !args.contains(name) {
+            continue;
+        }
+        let text = mark_text(editor, p.line, 15);
+        let col = byte_col(editor, p);
+        lines.push(format!(" {name} {:>6} {col:>4} {text}", p.line + 1));
+    }
+    if lines.len() == 1 {
+        editor.error(format!("E283: No marks matching \"{args}\""));
+        return;
+    }
+    let command = if args.is_empty() {
+        "marks".to_string()
+    } else {
+        format!("marks {args}")
+    };
+    show_list(editor, &command, lines);
+}
+
+/// `:delmarks {names}` (ranges like `a-d` work), and `:delmarks!` for all lowercase marks.
+fn delmarks(editor: &mut Editor, bang: bool, args: &str) {
+    if !bang && args.is_empty() {
+        editor.error("E471: Argument required");
+        return;
+    }
+    let marks = &mut editor.current_buffer_mut().marks;
+    if bang {
+        for c in 'a'..='z' {
+            marks.remove(c);
+        }
+        return;
+    }
+    let chars: Vec<char> = args.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if i + 2 < chars.len() && chars[i + 1] == '-' {
+            for c in chars[i]..=chars[i + 2] {
+                marks.remove(c);
+            }
+            i += 3;
+        } else {
+            marks.remove(chars[i]);
+            i += 1;
+        }
+    }
+}
+
+/// `:jumps`.
+fn jumps(editor: &mut Editor, _bang: bool, _args: &str) {
+    let (entries, idx) = editor.window.jumps.entries();
+    let entries = entries.to_vec();
+    let mut lines = vec![" jump line  col file/text".to_string()];
+    for (i, p) in entries.iter().enumerate() {
+        let distance = i.abs_diff(idx);
+        let marker = if i == idx { '>' } else { ' ' };
+        let text = mark_text(editor, p.line, 16);
+        let col = byte_col(editor, *p);
+        lines.push(format!(
+            "{marker}{distance:>3} {:>5} {col:>4} {text}",
+            p.line + 1
+        ));
+    }
+    if idx >= entries.len() {
+        lines.push(">".to_string());
+    }
+    show_list(editor, "jumps", lines);
 }
 
 #[cfg(test)]

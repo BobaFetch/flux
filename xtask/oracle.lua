@@ -38,10 +38,14 @@ for _, case in ipairs(cases) do
   local input = case_lines(case)
   vim.fn.writefile(input, tmp)
   vim.cmd("silent! %bwipeout!")
+  -- Start each case like a fresh `:edit`, which puts line 1 in the jumplist.
+  vim.cmd("clearjumps")
   vim.cmd("silent edit! " .. vim.fn.fnameescape(tmp))
-  for _, r in ipairs({ '"', "a", "0", "1", "2", "-", "q" }) do
+  for _, r in ipairs({ '"', "a", "b", "q", "0", "1", "2", "3", "-" }) do
     vim.fn.setreg(r, "")
   end
+  vim.fn.histdel(":")
+  vim.cmd("silent! delmarks A-Z0-9")
   vim.api.nvim_win_set_cursor(0, { case.cur[1] + 1, case.cur[2] })
   vim.cmd("redraw")
   local chunks = type(case.keys) == "table" and case.keys or { case.keys }
@@ -56,11 +60,20 @@ for _, case in ipairs(cases) do
   if case.gen and text == table.concat(input, "\n") then
     text = nil
   end
+  -- Registers the case asks about: contents and type (`v`, `V`, or `^V{width}`).
+  local regs = nil
+  if case.regs then
+    regs = {}
+    for _, name in ipairs(case.regs) do
+      regs[name] = { vim.fn.getreg(name), vim.fn.getregtype(name) }
+    end
+  end
   out[#out + 1] = {
     id = case.id,
     text = text,
     cur = { pos[1] - 1, pos[2] },
     top = vim.fn.line("w0") - 1,
+    regs = regs,
   }
 end
 vim.fn.writefile({ vim.json.encode(out) }, arg[2])

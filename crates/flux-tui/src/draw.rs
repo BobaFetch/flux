@@ -1,7 +1,7 @@
 //! Draws the editor into a grid: the window's text, the statusline and the command line.
 
 use flux_core::{GlyphKind, LineLayout, layout_line};
-use flux_view::{Editor, MessageKind, Mode};
+use flux_view::{Cursor, Editor, MessageKind, Mode, VisualKind};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -10,6 +10,11 @@ use crate::grid::{Color, Grid, Style};
 /// Vim's NonText and SpecialKey groups: `~` past the end, `@@@`, `>` fillers, `^X`.
 const NON_TEXT: Style = Style::fg(Color::Ansi(8));
 const ERROR: Style = Style::fg(Color::Ansi(9));
+/// The Visual selection: a grey background that works on light and dark terminals.
+const VISUAL: Style = Style {
+    bg: Color::Ansi(8),
+    ..Style::fg(Color::Reset)
+};
 const STATUS_LINE: Style = Style {
     reverse: true,
     ..Style::fg(Color::Reset)
@@ -45,6 +50,13 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
     {
         return Some(pos);
     }
+    let size;
+    let showcmd = if showcmd.is_empty() && editor.mode == Mode::Visual {
+        size = selection_size(editor);
+        size.as_str()
+    } else {
+        showcmd
+    };
     if !showcmd.is_empty() && width > 11 && editor.mode != Mode::CmdLine {
         let text: String = showcmd
             .chars()
@@ -83,6 +95,9 @@ fn draw_text(editor: &Editor, grid: &mut Grid, text_rows: usize) -> Option<(usiz
         }
         let shown = layout.row_count().min(text_rows - row);
         draw_rows(grid, &layout, row, shown);
+        if let Some((from, to)) = selected_columns(editor, line) {
+            highlight(grid, &layout, row, shown, from, to);
+        }
         if line == win.cursor.line {
             let (r, x) = layout.cursor_position(win.cursor.col, editor.mode == Mode::Insert);
             if r < shown {
@@ -109,6 +124,98 @@ fn draw_rows(grid: &mut Grid, layout: &LineLayout, first_row: usize, count: usiz
             grid.set(x, first_row + r, &glyph.symbol, glyph.width, style);
             x += usize::from(glyph.width);
         }
+    }
+}
+
+/// The selected chars of `line` as `[from, to)`, with `to` past the end when the line break
+/// is selected too.
+fn selected_columns(editor: &Editor, line: usize) -> Option<(usize, usize)> {
+    if editor.mode != Mode::Visual {
+        return None;
+    }
+    let a = editor.visual.anchor;
+    let c = editor.window.cursor;
+    let (start, end) = if (c.line, c.col) < (a.line, a.col) {
+        (c, a)
+    } else {
+        (a, c)
+    };
+    if line < start.line || line > end.line {
+        return None;
+    }
+    let len = editor.current_buffer().text.line_len(line);
+    if editor.visual.kind == VisualKind::Line {
+        return Some((0, len.max(1)));
+    }
+    let from = if line == start.line { start.col } else { 0 };
+    let eol = editor.window.curswant == usize::MAX && c == end;
+    let to = if line == end.line && !eol {
+        end.col + 1
+    } else {
+        len + 1
+    };
+    Some((from, to))
+}
+
+/// Paint the selection's background over already drawn glyphs; a selected line break shows as
+/// one highlighted cell after the text.
+fn highlight(
+    grid: &mut Grid,
+    layout: &LineLayout,
+    first_row: usize,
+    rows: usize,
+    from: usize,
+    to: usize,
+) {
+    let mut end_cell = (first_row, 0);
+    for (r, glyphs) in layout.rows.iter().take(rows).enumerate() {
+        let mut x = 0;
+        for glyph in glyphs {
+            if glyph.char_idx >= from && glyph.char_idx < to {
+                let cell = grid.cell(x, first_row + r).clone();
+                if cell.width > 0 {
+                    let style = Style {
+                        bg: VISUAL.bg,
+                        ..cell.style
+                    };
+                    grid.set(x, first_row + r, &cell.symbol, cell.width, style);
+                }
+            }
+            x += usize::from(glyph.width);
+        }
+        end_cell = (first_row + r, x);
+    }
+    let len = layout
+        .rows
+        .iter()
+        .flatten()
+        .map(|g| g.char_idx + 1)
+        .max()
+        .unwrap_or(0);
+    if to > len && from <= len && end_cell.1 < grid.width() {
+        grid.set(end_cell.1, end_cell.0, " ", 1, VISUAL);
+    }
+}
+
+/// Vim's 'showcmd' in Visual mode: the selection's size, `chars` (or `chars-bytes`) within a
+/// line, otherwise lines.
+fn selection_size(editor: &Editor) -> String {
+    let a: Cursor = editor.visual.anchor;
+    let c = editor.window.cursor;
+    let lines = a.line.abs_diff(c.line) + 1;
+    if editor.visual.kind == VisualKind::Line || lines > 1 {
+        return lines.to_string();
+    }
+    let text = &editor.current_buffer().text;
+    let s = text.line_str(c.line);
+    let (from, to) = (a.col.min(c.col), a.col.max(c.col));
+    let selected: String = s.chars().skip(from).take(to + 1 - from).collect();
+    let chars = selected.chars().count().max(1);
+    let bytes = selected.len().max(1);
+    if chars == bytes {
+        chars.to_string()
+    } else {
+        format!("{chars}-{bytes}")
     }
 }
 
@@ -250,12 +357,23 @@ fn draw_cmdline(editor: &Editor, grid: &mut Grid, y: usize) -> Option<(usize, us
             let end = grid.put_str(0, y, &format!(":{}", editor.cmdline), Style::default());
             Some((end.min(grid.width() - 1), y))
         }
-        Mode::Insert => {
-            grid.put_str(0, y, "-- INSERT --", MODE_MSG);
+        Mode::Insert | Mode::Visual => {
+            let mode = match (editor.mode, editor.visual.kind) {
+                (Mode::Insert, _) => "-- INSERT --",
+                (_, VisualKind::Char) => "-- VISUAL --",
+                (_, VisualKind::Line) => "-- VISUAL LINE --",
+            };
+            let end = grid.put_str(0, y, mode, MODE_MSG);
+            draw_recording(editor, grid, end, y);
             None
         }
         Mode::Normal if editor.insert_pending => {
-            grid.put_str(0, y, "-- (insert) --", MODE_MSG);
+            let end = grid.put_str(0, y, "-- (insert) --", MODE_MSG);
+            draw_recording(editor, grid, end, y);
+            None
+        }
+        Mode::Normal if editor.message.is_none() => {
+            draw_recording(editor, grid, 0, y);
             None
         }
         Mode::Normal => {
@@ -276,6 +394,13 @@ fn draw_cmdline(editor: &Editor, grid: &mut Grid, y: usize) -> Option<(usize, us
             }
             None
         }
+    }
+}
+
+/// Vim's `recording @a` after the mode message.
+fn draw_recording(editor: &Editor, grid: &mut Grid, x: usize, y: usize) {
+    if let Some(reg) = editor.recording {
+        grid.put_str(x, y, &format!("recording @{reg}"), MODE_MSG);
     }
 }
 

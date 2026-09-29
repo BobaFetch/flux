@@ -41,7 +41,7 @@ and, ideally, `nvim --clean <same file>` next to it:
 Known gaps, by design until later milestones: no horizontal movement or editing (M1), one file
 only (M3), no syntax colors (M5).
 
-## M1: Core editing ✅ (awaiting manual check)
+## M1: Core editing ✅
 
 Normal and Insert modes with Vim's grammar, undo, `.`, registers for yank/put, and saving.
 
@@ -93,7 +93,48 @@ joining comment lines ('formatoptions' `j`), `%` skipping brackets in quotes, un
 changes older than 100 seconds (Vim shows a clock time), and swap files. Saving replaces the file
 with a new one, so hard links to it are not updated.
 
-## M2: Visual mode, text objects, registers
+## M2: Visual mode, text objects, registers ✅ (awaiting manual check)
+
+- Visual mode `v` / `V`: every motion, `o`, `gv`, switching kinds, counts; operators `d x c s
+  y > < ~ u U J gJ r`, the linewise `D X C S R Y`, and `p` / `P` replacing the selection (`p`
+  sends the replaced text to the registers, `P` doesn't). `v$` takes the line break. `.` repeats
+  a Visual operator on the same amount of text. `:` starts the command line with `'<,'>` (the
+  range itself works in M4). The selection is highlighted, with its size in the showcmd area.
+- Text objects, with counts, after operators and in Visual mode (where they grow the
+  selection): `iw aw iW aW`, `i" a" i' a' i` a``, `i( a( ib ab`, `i[ a[`, `i{ a{ iB aB`,
+  `i< a<`, `ip ap`, `it at`. Ported from Vim's `textobject.c`, including its white-space rules,
+  multi-line blocks becoming linewise, and the between-two-strings quirk of `i"`.
+- Registers: `"x` before any command; `"a`–`"z` and appending with `"A`–`"Z`; `"0`, `"1`–`"9`
+  (multi-line deletes shift through them even into a named register), `"-`, `"_`; read-only
+  `".` (last inserted text), `":` (last command line) and `"%` (file name). `"1p` then `.`
+  puts `"2`, `"3`, …. `CTRL-R {reg}` in Insert mode and on the command line.
+- Macros: `q{reg}` / `q` (with `recording @a` shown), `@{reg}`, `@@`, `@:`, counts, appending
+  with `qA`. Stored as text like Vim, so `"ap` shows a macro and a yanked line can be run. A
+  failing command stops the macro.
+- Marks `m{a-zA-Z}`, `'x` / `` `x ``, `''` / ``` `` ```, and the automatic `'[ '] '< '> '. '^ '"`.
+  Marks move with inserted and deleted lines; a mark on a deleted line is deleted (E20).
+- Jumplist: `CTRL-O`, `CTRL-I` / `<Tab>` with counts; `G gg % { } H M L` and mark jumps add to
+  it; `gi`.
+- `:registers` / `:display`, `:marks`, `:delmarks`, `:jumps`, formatted like Neovim's.
+
+Verified: all 548 M0–M2 oracle cases match Neovim 0.12.5 (register contents and types
+included), and 126 key sequences produce screens and saved files identical to `nvim --clean`.
+Fixed along the way: a crash when deleting every line from far down a long file (reachable with
+`dG` in M1 too), and undo after an operator now returns to where Vim puts it.
+
+### Manual check
+
+1. Visual mode on real code: `vjjd`, `Vjj>`, `v$y`, `viwp` over another word, `gv`, `vip` then
+   `J`, and `.` after a Visual operator.
+2. Text objects: `ciw`, `daw`, `ci"`, `da(`, `di{` inside a multi-line block, `dap`, `cit` in
+   HTML, `yi(` then `P`.
+3. Registers: `"ayy`, `"Ayy`, `"ap`; delete a few lines then `"1p..`; `:reg`.
+4. A macro: `qa` … `q`, `5@a`, `@@`; one that fails partway (runs off the end of the file).
+5. Marks and jumps: `ma`, move, `'a` and `` `a ``, `G` then `CTRL-O` / `CTRL-I`, `:marks`,
+   `:jumps`, `gi`.
+
+Known gaps: visual-block mode (`CTRL-V`), `:normal` and `:g` (all later); sentence objects
+(`is`/`as`) and `(`/`)`; clipboard registers `"+`/`"*` (M7); marks on other files (M3).
 
 ## M3: Windows and buffers
 

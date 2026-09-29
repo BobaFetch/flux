@@ -64,6 +64,29 @@ pub enum Motion {
     WindowMiddle,
     /// `L`.
     WindowBottom,
+    /// `'x` (to the line, `exact` false) or `` `x `` (to the exact position).
+    Mark {
+        name: char,
+        exact: bool,
+    },
+}
+
+impl Motion {
+    /// Vim's "jump" motions, which remember where they started in the jumplist.
+    pub fn is_jump(self) -> bool {
+        matches!(
+            self,
+            Motion::GotoLine
+                | Motion::GotoFirstLine
+                | Motion::Percent
+                | Motion::ParagraphForward
+                | Motion::ParagraphBackward
+                | Motion::WindowTop
+                | Motion::WindowMiddle
+                | Motion::WindowBottom
+                | Motion::Mark { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,6 +345,18 @@ pub fn eval(motion: Motion, cx: &Context) -> Option<Target> {
                 ..target(p, kind, Want::Column)
             })
         }
+        Motion::Mark { name, exact } => {
+            let p = mark_position(editor, name)?;
+            let line = p.line.min(text.last_line());
+            if exact {
+                let s = util::line(editor, line);
+                let col = p.col.min(chars::last_grapheme(&s));
+                Some(target(pos(line, col), Kind::Exclusive, Want::Column))
+            } else {
+                let col = util::first_non_blank(&util::line(editor, line));
+                Some(target(pos(line, col), Kind::Linewise, Want::Column))
+            }
+        }
         Motion::WindowTop | Motion::WindowMiddle | Motion::WindowBottom => {
             let m = editor.metrics();
             let win = &editor.window;
@@ -333,6 +368,14 @@ pub fn eval(motion: Motion, cx: &Context) -> Option<Target> {
             };
             Some(target(on_line(editor, l), Kind::Linewise, Want::Keep))
         }
+    }
+}
+
+/// Where mark `name` is: a letter, `'`/`` ` `` (the last jump), or one of Vim's automatic marks.
+fn mark_position(editor: &Editor, name: char) -> Option<Pos> {
+    match name {
+        '\'' | '`' => editor.window.pcmark.or(Some(pos(0, 0))),
+        _ => editor.current_buffer().marks.get(name),
     }
 }
 
@@ -542,7 +585,7 @@ fn word_command(
 
 /// A cursor walking the text one grapheme at a time, including the position just past the end
 /// of each line (Vim's NUL position), which counts as a blank.
-struct Scanner<'a> {
+pub(crate) struct Scanner<'a> {
     text: &'a Text,
     big: bool,
     line: usize,
@@ -552,7 +595,7 @@ struct Scanner<'a> {
 }
 
 impl<'a> Scanner<'a> {
-    fn new(text: &'a Text, p: Pos, big: bool) -> Self {
+    pub(crate) fn new(text: &'a Text, p: Pos, big: bool) -> Self {
         let mut sc = Self {
             text,
             big,
@@ -572,19 +615,69 @@ impl<'a> Scanner<'a> {
         self.chars = self.line_text.chars().collect();
     }
 
-    fn pos(&self) -> Pos {
+    pub(crate) fn pos(&self) -> Pos {
         pos(self.line, self.col)
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn set(&mut self, p: Pos) {
+        if p.line != self.line {
+            self.load(p.line);
+        }
+        self.col = p.col.min(self.len());
+    }
+
+    pub(crate) fn col(&self) -> usize {
+        self.col
+    }
+
+    /// Vim's `incl`: like `inc`, but skip over the end-of-line position to the next line.
+    pub(crate) fn incl(&mut self) -> i32 {
+        let r = self.inc();
+        if r >= 1 && self.col > 0 {
+            return self.inc();
+        }
+        r
+    }
+
+    /// Vim's `decl`: like `dec`, but skip over the end-of-line position of the previous line.
+    pub(crate) fn decl(&mut self) -> i32 {
+        let r = self.dec();
+        if r == 1 && self.col > 0 {
+            return self.dec();
+        }
+        r
+    }
+
+    /// Vim's `oneleft`: one character left within the line.
+    pub(crate) fn oneleft(&mut self) -> bool {
+        if self.col == 0 {
+            return false;
+        }
+        self.col = chars::prev_grapheme(&self.line_text, self.col);
+        true
+    }
+
+    /// Vim's `back_in_line`: back to the start of the run of same-class characters.
+    pub(crate) fn back_in_line(&mut self) {
+        let class = self.cls();
+        while self.col > 0 {
+            self.dec();
+            if self.cls() != class {
+                self.inc();
+                break;
+            }
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
         self.chars.len()
     }
 
-    fn line_empty(&self) -> bool {
+    pub(crate) fn line_empty(&self) -> bool {
         self.chars.is_empty()
     }
 
-    fn cls(&self) -> u32 {
+    pub(crate) fn cls(&self) -> u32 {
         match self.chars.get(self.col) {
             Some(&c) => chars::class(c, self.big),
             None => 0,
@@ -593,7 +686,7 @@ impl<'a> Scanner<'a> {
 
     /// Vim's `inc`: 0 within the line, 2 onto the end of the line, 1 onto the next line, -1 at
     /// the end of the buffer.
-    fn inc(&mut self) -> i32 {
+    pub(crate) fn inc(&mut self) -> i32 {
         if self.col < self.len() {
             self.col = chars::next_grapheme(&self.line_text, self.col);
             return if self.col < self.len() { 0 } else { 2 };
@@ -607,7 +700,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Vim's `dec`: 0 within the line, 1 onto the end of the previous line, -1 at the start.
-    fn dec(&mut self) -> i32 {
+    pub(crate) fn dec(&mut self) -> i32 {
         if self.col > 0 {
             self.col = chars::prev_grapheme(&self.line_text, self.col);
             return 0;
@@ -621,7 +714,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Skip characters of class `class`. True when it ran into the end of the buffer.
-    fn skip_chars(&mut self, class: u32, forward: bool) -> bool {
+    pub(crate) fn skip_chars(&mut self, class: u32, forward: bool) -> bool {
         while self.cls() == class {
             let r = if forward { self.inc() } else { self.dec() };
             if r == -1 {
@@ -631,7 +724,7 @@ impl<'a> Scanner<'a> {
         false
     }
 
-    fn fwd_word(&mut self, mut count: usize, eol: bool) -> bool {
+    pub(crate) fn fwd_word(&mut self, mut count: usize, eol: bool) -> bool {
         while count > 0 {
             count -= 1;
             let sclass = self.cls();
@@ -664,7 +757,7 @@ impl<'a> Scanner<'a> {
         true
     }
 
-    fn end_word(&mut self, mut count: usize, mut stop: bool, empty: bool) -> bool {
+    pub(crate) fn end_word(&mut self, mut count: usize, mut stop: bool, empty: bool) -> bool {
         while count > 0 {
             count -= 1;
             let sclass = self.cls();
@@ -698,7 +791,7 @@ impl<'a> Scanner<'a> {
         true
     }
 
-    fn bck_word(&mut self, mut count: usize, mut stop: bool) -> bool {
+    pub(crate) fn bck_word(&mut self, mut count: usize, mut stop: bool) -> bool {
         while count > 0 {
             count -= 1;
             let sclass = self.cls();
@@ -728,7 +821,7 @@ impl<'a> Scanner<'a> {
         true
     }
 
-    fn bckend_word(&mut self, mut count: usize, eol: bool) -> bool {
+    pub(crate) fn bckend_word(&mut self, mut count: usize, eol: bool) -> bool {
         while count > 0 {
             count -= 1;
             let sclass = self.cls();

@@ -3,22 +3,23 @@
 use flux_core::{Edit, chars};
 use flux_view::{Editor, Mode, Register, RegisterKind};
 
-use crate::engine::Engine;
+use crate::engine::{Dot, Engine};
 use crate::ex;
 use crate::insert::InsertKind;
 use crate::motion::{self, Context, Kind, Motion, Pending, Target, Want};
 use crate::parse::{Action, Command, InsertAt, OpTarget, Operator, Scroll};
+use crate::textobj;
 use crate::util::{self, Pos, before, pos};
 
 /// The text an operator works on.
 #[derive(Debug, Clone, Copy)]
-struct Range {
-    start: Pos,
-    end: Pos,
-    linewise: bool,
+pub(crate) struct Range {
+    pub start: Pos,
+    pub end: Pos,
+    pub linewise: bool,
     /// Charwise: `end` is included.
-    inclusive: bool,
-    numbered_register: bool,
+    pub inclusive: bool,
+    pub numbered_register: bool,
 }
 
 impl Engine {
@@ -29,47 +30,89 @@ impl Engine {
             action,
             keys,
         } = cmd;
-        match action {
-            Action::Move(m) => {
-                if let Some(t) = self.motion(editor, m, count, Pending::None) {
+        let dot = Dot {
+            keys,
+            count,
+            visual: None,
+        };
+        let done = match action {
+            Action::Move(m) => match self.motion(editor, m, count, Pending::None) {
+                Some(t) => {
                     self.remember_find(m);
+                    if m.is_jump() {
+                        set_pcmark(editor);
+                    }
                     self.move_to(editor, t);
+                    true
                 }
-            }
+                None => {
+                    mark_not_set(editor, m);
+                    false
+                }
+            },
             Action::Operate(op, target) => {
                 let done = self.operate(editor, op, target, count, register);
                 if done && op.changes_text() {
                     if op == Operator::Change {
-                        self.recording = Some(crate::engine::Dot { keys, count });
+                        self.recording = Some(dot);
                     } else {
-                        self.set_dot(keys, count);
+                        self.set_dot(dot);
                     }
                 }
+                done
             }
             Action::Put { before } => {
-                if self.put(editor, register, count.unwrap_or(1), before) {
-                    self.set_dot(keys, count);
+                let done = self.put(editor, register, count.unwrap_or(1), before);
+                if done {
+                    self.set_dot(dot);
                 }
+                done
             }
             Action::Replace(c) => {
-                if self.replace(editor, count.unwrap_or(1), c) {
-                    self.set_dot(keys, count);
+                let done = self.replace(editor, count.unwrap_or(1), c);
+                if done {
+                    self.set_dot(dot);
                 }
+                done
             }
             Action::Join { spaces } => {
-                if self.join(editor, count, spaces) {
-                    self.set_dot(keys, count);
+                let done = self.join(editor, count, spaces);
+                if done {
+                    self.set_dot(dot);
                 }
+                done
             }
             Action::ToggleCase => {
-                if self.toggle_case(editor, count.unwrap_or(1)) {
-                    self.set_dot(keys, count);
+                let done = self.toggle_case(editor, count.unwrap_or(1));
+                if done {
+                    self.set_dot(dot);
                 }
+                done
             }
             Action::Insert(at) => {
-                self.recording = Some(crate::engine::Dot { keys, count });
+                self.recording = Some(dot);
                 self.start_insert(editor, at, count.unwrap_or(1));
+                true
             }
+            other => {
+                self.run_other(editor, other, count);
+                true
+            }
+        };
+        if !done {
+            self.failed = true;
+        }
+    }
+
+    fn run_other(&mut self, editor: &mut Editor, action: Action, count: Option<usize>) {
+        match action {
+            Action::Move(_)
+            | Action::Operate(..)
+            | Action::Put { .. }
+            | Action::Replace(_)
+            | Action::Join { .. }
+            | Action::ToggleCase
+            | Action::Insert(_) => unreachable!("handled in run"),
             Action::Undo => self.undo(editor, count.unwrap_or(1), false),
             Action::Redo => self.undo(editor, count.unwrap_or(1), true),
             Action::Repeat => self.repeat(editor, count),
@@ -79,6 +122,44 @@ impl Engine {
             Action::WriteQuit => ex::execute(editor, "x"),
             Action::QuitDiscard => ex::execute(editor, "q!"),
             Action::Redraw => {}
+            Action::SetMark(name) => {
+                let cur = editor.cursor();
+                match name {
+                    '\'' | '`' => set_pcmark(editor),
+                    _ => editor.current_buffer_mut().marks.set(name, cur),
+                }
+            }
+            Action::Record(name) => self.start_recording(editor, name),
+            Action::StopRecord => self.stop_recording(editor),
+            Action::Execute(name) => self.execute_register(editor, name, count.unwrap_or(1)),
+            Action::Jump { older } => {
+                let n = count.unwrap_or(1) as isize;
+                let cur = editor.cursor();
+                match editor.window.jumps.jump(if older { n } else { -n }, cur) {
+                    Some(p) => {
+                        let line = p.line.min(editor.text().last_line());
+                        editor.window.cursor = pos(line, p.col);
+                        normalize_cursor(editor);
+                        set_want(editor, Want::Column);
+                    }
+                    None => self.failed = true,
+                }
+            }
+            Action::Visual(kind) => self.start_visual(editor, kind),
+            Action::Reselect => self.reselect(editor),
+            Action::InsertAtLastInsert => {
+                if let Some(p) = editor.current_buffer().marks.get('^') {
+                    let line = p.line.min(editor.text().last_line());
+                    let len = editor.text().line_len(line);
+                    editor.window.cursor = pos(line, p.col.min(len));
+                }
+                self.recording = Some(Dot {
+                    keys: vec![crate::key::Key::char('i')],
+                    count: None,
+                    visual: None,
+                });
+                self.start_insert(editor, InsertAt::Cursor, count.unwrap_or(1));
+            }
         }
     }
 
@@ -147,13 +228,51 @@ impl Engine {
                     Pending::Other
                 };
                 let Some(t) = self.motion(editor, m, count, pending) else {
+                    mark_not_set(editor, m);
                     return false;
                 };
                 self.remember_find(m);
+                if m.is_jump() {
+                    set_pcmark(editor);
+                }
                 t
+            }
+            OpTarget::Object(obj) => {
+                let Some(sel) = textobj::select(editor.text(), obj, count.unwrap_or(1), cur, None)
+                else {
+                    return false;
+                };
+                let range = op_range_between(
+                    editor,
+                    op,
+                    sel.start,
+                    sel.end,
+                    sel.kind,
+                    false,
+                    sel.no_adjust,
+                );
+                self.apply_operator(editor, op, range, register);
+                return true;
             }
         };
         let range = op_range(editor, op, cur, t);
+        self.apply_operator(editor, op, range, register);
+        true
+    }
+
+    /// Run an operator on a range.
+    pub(crate) fn apply_operator(
+        &mut self,
+        editor: &mut Editor,
+        op: Operator,
+        range: Range,
+        register: Option<char>,
+    ) {
+        // Vim puts the cursor at the start of the text before operating on it, which is also
+        // where undo returns to.
+        if op != Operator::Yank {
+            editor.window.cursor = range.start;
+        }
         match op {
             Operator::Delete => self.delete(editor, range, register),
             Operator::Change => self.change(editor, range, register),
@@ -171,10 +290,9 @@ impl Engine {
         // Like Vim, the column to aim for is recomputed from wherever the operator leaves the
         // cursor, at the next vertical move.
         editor.window.set_curswant = true;
-        true
     }
 
-    fn delete(&mut self, editor: &mut Editor, r: Range, register: Option<char>) {
+    pub(crate) fn delete(&mut self, editor: &mut Editor, r: Range, register: Option<char>) {
         if r.linewise {
             let text = lines_text(editor, r.start.line, r.end.line);
             editor
@@ -228,7 +346,7 @@ impl Engine {
         }
     }
 
-    fn change(&mut self, editor: &mut Editor, r: Range, register: Option<char>) {
+    pub(crate) fn change(&mut self, editor: &mut Editor, r: Range, register: Option<char>) {
         if r.linewise {
             let text = lines_text(editor, r.start.line, r.end.line);
             editor
@@ -262,7 +380,7 @@ impl Engine {
         }
     }
 
-    fn shift(&mut self, editor: &mut Editor, first: usize, last: usize, right: bool) {
+    pub(crate) fn shift(&mut self, editor: &mut Editor, first: usize, last: usize, right: bool) {
         let sw = editor.options.shiftwidth;
         let ts = editor.options.tabstop;
         for line in first..=last {
@@ -297,7 +415,7 @@ impl Engine {
         }
     }
 
-    fn change_case(&mut self, editor: &mut Editor, r: Range, op: Operator) {
+    pub(crate) fn change_case(&mut self, editor: &mut Editor, r: Range, op: Operator) {
         let (from, to) = if r.linewise {
             let t = editor.text();
             (
@@ -339,11 +457,23 @@ impl Engine {
         count: usize,
         before: bool,
     ) -> bool {
-        let Some(reg) = editor.registers.get(register).cloned() else {
+        let Some(reg) = editor.register(register) else {
             let name = register.unwrap_or('"');
             editor.error(format!("E353: Nothing in register {name}"));
             return false;
         };
+        self.put_register(editor, &reg, count, before);
+        true
+    }
+
+    /// Put `reg` after (or `before`) the cursor, `count` times.
+    pub(crate) fn put_register(
+        &mut self,
+        editor: &mut Editor,
+        reg: &Register,
+        count: usize,
+        before: bool,
+    ) {
         let cur = editor.cursor();
         match reg.kind {
             RegisterKind::Line | RegisterKind::Block => {
@@ -359,6 +489,9 @@ impl Engine {
                 let col = util::first_non_blank(&util::line(editor, at_line));
                 editor.window.cursor = pos(at_line, col);
                 let added = (reg.text.matches('\n').count() + 1) * count;
+                let marks = &mut editor.current_buffer_mut().marks;
+                marks.set('[', pos(at_line, 0));
+                marks.set(']', pos(at_line + added - 1, usize::MAX));
                 if let Some(msg) = util::more_lines_message(added as isize) {
                     editor.info(msg);
                 }
@@ -375,6 +508,11 @@ impl Engine {
                 let len = text.chars().count();
                 let multiline = text.contains('\n');
                 self.edit(editor, Edit::insert(at, text));
+                // '] is the last character put.
+                let (l, c) = editor.text().char_to_pos(at + len.saturating_sub(1));
+                let marks = &mut editor.current_buffer_mut().marks;
+                marks.set('[', pos(cur.line, col));
+                marks.set(']', pos(l, c));
                 editor.window.cursor = if multiline {
                     pos(cur.line, col)
                 } else {
@@ -388,7 +526,6 @@ impl Engine {
             }
         }
         set_want(editor, Want::Column);
-        true
     }
 
     fn replace(&mut self, editor: &mut Editor, count: usize, c: char) -> bool {
@@ -429,7 +566,7 @@ impl Engine {
         true
     }
 
-    fn join(&mut self, editor: &mut Editor, count: Option<usize>, spaces: bool) -> bool {
+    pub(crate) fn join(&mut self, editor: &mut Editor, count: Option<usize>, spaces: bool) -> bool {
         let cur = editor.cursor();
         let last = editor.text().last_line();
         let mut n = count.unwrap_or(0).max(2);
@@ -554,19 +691,29 @@ impl Engine {
 /// Work out the text an operator covers, applying Vim's adjustments for exclusive motions
 /// (`:h exclusive-linewise`) and for deletes that end at the end of a line.
 fn op_range(editor: &Editor, op: Operator, cur: Pos, t: Target) -> Range {
-    let (mut start, mut end) = if before(t.pos, cur) {
-        (t.pos, cur)
-    } else {
-        (cur, t.pos)
-    };
-    let mut linewise = t.kind == Kind::Linewise;
-    let mut inclusive = t.kind == Kind::Inclusive;
+    op_range_between(editor, op, cur, t.pos, t.kind, t.numbered_register, false)
+}
+
+/// The range between two positions, however they're ordered, with Vim's adjustments (skipped
+/// with `no_adjust`).
+fn op_range_between(
+    editor: &Editor,
+    op: Operator,
+    a: Pos,
+    b: Pos,
+    kind: Kind,
+    numbered_register: bool,
+    no_adjust: bool,
+) -> Range {
+    let (mut start, mut end) = if before(b, a) { (b, a) } else { (a, b) };
+    let mut linewise = kind == Kind::Linewise;
+    let mut inclusive = kind == Kind::Inclusive;
     if linewise {
         start.col = start
             .col
             .min(util::line(editor, start.line).chars().count());
     }
-    if t.kind == Kind::Exclusive && end.col == 0 && end.line > start.line {
+    if kind == Kind::Exclusive && end.col == 0 && end.line > start.line && !no_adjust {
         end.line -= 1;
         if util::in_indent(&util::line(editor, start.line), start.col) {
             linewise = true;
@@ -578,7 +725,7 @@ fn op_range(editor: &Editor, op: Operator, cur: Pos, t: Target) -> Range {
             }
         }
     }
-    if op == Operator::Delete && !linewise && end.line > start.line {
+    if op == Operator::Delete && !linewise && end.line > start.line && !no_adjust {
         let s = util::line(editor, end.line);
         let after = if inclusive {
             chars::next_grapheme(&s, end.col)
@@ -596,12 +743,12 @@ fn op_range(editor: &Editor, op: Operator, cur: Pos, t: Target) -> Range {
         end,
         linewise,
         inclusive,
-        numbered_register: t.numbered_register,
+        numbered_register,
     }
 }
 
 /// Char indices `[from, to)` of a charwise range.
-fn char_range(editor: &Editor, r: &Range) -> (usize, usize) {
+pub(crate) fn char_range(editor: &Editor, r: &Range) -> (usize, usize) {
     let t = editor.text();
     let from = t.pos_to_char(r.start.line, r.start.col);
     let to = if r.inclusive {
@@ -613,14 +760,14 @@ fn char_range(editor: &Editor, r: &Range) -> (usize, usize) {
     (from, to.max(from))
 }
 
-fn lines_text(editor: &Editor, first: usize, last: usize) -> String {
+pub(crate) fn lines_text(editor: &Editor, first: usize, last: usize) -> String {
     (first..=last)
         .map(|l| util::line(editor, l))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn yank(editor: &mut Editor, r: Range, register: Option<char>) {
+pub(crate) fn yank(editor: &mut Editor, r: Range, register: Option<char>) {
     let (text, kind) = if r.linewise {
         (
             lines_text(editor, r.start.line, r.end.line),
@@ -631,6 +778,19 @@ fn yank(editor: &mut Editor, r: Range, register: Option<char>) {
         (editor.text().slice(from..to), RegisterKind::Char)
     };
     editor.registers.yank(register, Register::new(text, kind));
+    let (open, close) = if r.linewise {
+        (pos(r.start.line, 0), pos(r.end.line, usize::MAX))
+    } else if r.inclusive {
+        (r.start, r.end)
+    } else {
+        // `']` is on the last character yanked, not just after it.
+        let (from, to) = char_range(editor, &r);
+        let (l, c) = editor.text().char_to_pos(to.saturating_sub(1).max(from));
+        (r.start, pos(l, c))
+    };
+    let marks = &mut editor.current_buffer_mut().marks;
+    marks.set('[', open);
+    marks.set(']', close);
     editor.window.cursor = r.start;
     normalize_cursor(editor);
     if !r.linewise {
@@ -650,6 +810,20 @@ pub(crate) fn normalize_cursor(editor: &mut Editor) {
     let s = text.line_str(line);
     let col = chars::snap_to_grapheme(&s, editor.window.cursor.col.min(chars::last_grapheme(&s)));
     editor.window.cursor = pos(line, col);
+}
+
+/// Remember the cursor as where a jump started: the `''` mark and a jumplist entry.
+pub(crate) fn set_pcmark(editor: &mut Editor) {
+    let cur = editor.cursor();
+    editor.window.pcmark = Some(cur);
+    editor.window.jumps.push(cur);
+}
+
+/// Vim's E20 for jumping to a mark that isn't set.
+fn mark_not_set(editor: &mut Editor, m: Motion) {
+    if let Motion::Mark { .. } = m {
+        editor.error("E20: Mark not set");
+    }
 }
 
 pub(crate) fn set_want(editor: &mut Editor, want: Want) {

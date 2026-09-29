@@ -2,10 +2,12 @@
 
 pub mod buffer;
 pub mod editor;
+pub mod marks;
 pub mod registers;
 pub mod window;
 
 pub use buffer::{Buffer, BufferId};
-pub use editor::{Editor, Message, MessageKind, Mode, Options};
+pub use editor::{Editor, Message, MessageKind, Mode, Options, Visual, VisualKind};
+pub use marks::{JumpList, LineShift, Marks};
 pub use registers::{Register, RegisterKind, Registers};
 pub use window::{Cursor, Metrics, Window};

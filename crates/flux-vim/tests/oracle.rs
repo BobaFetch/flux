@@ -8,7 +8,7 @@ use flux_view::Editor;
 use flux_vim::{Engine, parse_keys};
 use serde_json::Value;
 
-const MILESTONE: u64 = 1;
+const MILESTONE: u64 = 2;
 /// Neovim's headless screen; the text area is 80x22 once the statusline and command line are
 /// taken.
 const SCREEN: (usize, usize) = (80, 24);
@@ -90,6 +90,27 @@ fn run_case(case: &Value, expected: &Value) -> Vec<String> {
     let want_top = expected["top"].as_u64().unwrap() as usize;
 
     let mut diffs = Vec::new();
+    // Registers the case asks about, as Vim's `getreg()` and `getregtype()` report them.
+    if let Some(regs) = expected.get("regs").and_then(Value::as_object) {
+        for (name, want) in regs {
+            let c = name.chars().next().unwrap();
+            let got = match editor.register(Some(c)) {
+                Some(r) => match r.kind {
+                    flux_view::RegisterKind::Char => (r.text.clone(), "v".to_string()),
+                    flux_view::RegisterKind::Line => (format!("{}\n", r.text), "V".to_string()),
+                    flux_view::RegisterKind::Block => (r.text.clone(), "\u{16}".to_string()),
+                },
+                None => (String::new(), "v".to_string()),
+            };
+            let want = (
+                want[0].as_str().unwrap().to_string(),
+                want[1].as_str().unwrap().to_string(),
+            );
+            if got != want {
+                diffs.push(format!("register {name} {got:?}, want {want:?}"));
+            }
+        }
+    }
     if got_text != want_text {
         diffs.push(format!("text {got_text:?}, want {want_text:?}"));
     }
