@@ -17,7 +17,10 @@ pub struct Cursor {
 
 #[derive(Debug, Clone)]
 pub struct Window {
+    pub id: crate::WindowId,
     pub buffer: BufferId,
+    /// The alternate buffer (`#`, `CTRL-^`).
+    pub alt_buffer: Option<BufferId>,
     pub cursor: Cursor,
     /// The virtual column vertical moves aim for (Vim's `curswant`). It survives passing
     /// through shorter lines.
@@ -27,6 +30,21 @@ pub struct Window {
     pub set_curswant: bool,
     /// First buffer line shown.
     pub top: usize,
+    /// Columns of the top line scrolled off the top of the window (Vim's `w_skipcol`), for a
+    /// cursor line too tall to fit. Only meaningful while `top` is still `skip_top`.
+    skipcol: usize,
+    skip_top: usize,
+    /// Vim's 'scroll': rows `CTRL-D` and `CTRL-U` scroll. A count sets it until the next resize.
+    scroll: usize,
+    /// Vim's `VALID_TOPLINE` after a half-page scroll that left the cursor on its line: the
+    /// view is kept as is (even with the cursor line partly shown) until the cursor changes
+    /// lines, the view moves or the text changes. Holds (cursor line, top, line count, rows of
+    /// the cursor line).
+    keep_view: Option<(usize, usize, usize, usize)>,
+    /// While scrolling a page: the cursor line Vim last validated (`w_valid_cursor`), and
+    /// whether validating on another line has invalidated the top line since.
+    valid_line: usize,
+    topline_dirty: bool,
     /// Text area size in cells.
     pub width: usize,
     pub height: usize,
@@ -38,6 +56,10 @@ pub struct Window {
     /// Where the last jump came from (the `''` mark).
     pub pcmark: Option<Cursor>,
 }
+
+/// Columns the `<<<` marker covers at the start of a partly shown top line (Neovim's
+/// `sms_marker_overlap`).
+const SMS_MARKER: usize = 3;
 
 /// Vim's fixed-point scale for `w_fraction`.
 const FRACTION_MULT: usize = 16384;
@@ -54,6 +76,14 @@ impl Metrics<'_> {
     /// Screen rows line `line` takes up.
     pub fn rows(&self, line: usize) -> usize {
         layout_line(&self.text.line_str(line), self.tabstop, Some(self.width)).row_count()
+    }
+
+    /// Display width of `line`.
+    pub fn width_of(&self, line: usize) -> usize {
+        layout_line(&self.text.line_str(line), self.tabstop, None).rows[0]
+            .iter()
+            .map(|g| usize::from(g.width))
+            .sum()
     }
 
     fn last_line(&self) -> usize {
@@ -107,28 +137,24 @@ impl Metrics<'_> {
             .map(|g| usize::from(g.width))
             .sum()
     }
-
-    /// Rows taken by `lines`, stopping early once the sum passes `cap`.
-    fn rows_between(&self, lines: impl Iterator<Item = usize>, cap: usize) -> usize {
-        let mut total = 0;
-        for line in lines {
-            total += self.rows(line);
-            if total > cap {
-                break;
-            }
-        }
-        total
-    }
 }
 
 impl Window {
-    pub fn new(buffer: BufferId, width: usize, height: usize) -> Self {
+    pub fn new(id: crate::WindowId, buffer: BufferId, width: usize, height: usize) -> Self {
         Self {
+            id,
             buffer,
+            alt_buffer: None,
             cursor: Cursor::default(),
             curswant: 0,
             set_curswant: true,
             top: 0,
+            skipcol: 0,
+            skip_top: 0,
+            scroll: (height / 2).max(1),
+            keep_view: None,
+            valid_line: 0,
+            topline_dirty: false,
             width,
             height,
             fraction: 0,
@@ -149,6 +175,9 @@ impl Window {
     /// does (`win_new_height` and `scroll_to_fraction`). `m` describes the new height.
     pub fn set_height(&mut self, m: &Metrics) {
         let height = m.height;
+        if height != self.height {
+            self.scroll = (height / 2).max(1);
+        }
         if height == self.height || height == 0 {
             self.height = height.max(1);
             return;
@@ -204,9 +233,28 @@ impl Window {
         line
     }
 
-    /// Vim's 'scroll' default: half the window height.
+    /// Vim's 'scroll': half the window height unless a count to `CTRL-D` or `CTRL-U` set it.
     pub fn scroll_amount(&self) -> usize {
-        (self.height / 2).max(1)
+        self.scroll
+    }
+
+    /// `skipcol` for the current top line.
+    pub fn skipcol(&self) -> usize {
+        if self.skip_top == self.top {
+            self.skipcol
+        } else {
+            0
+        }
+    }
+
+    fn set_skipcol(&mut self, skipcol: usize) {
+        self.skipcol = skipcol;
+        self.skip_top = self.top;
+    }
+
+    /// Screen rows of the top line hidden by `skipcol`.
+    pub fn skip_rows(&self) -> usize {
+        self.skipcol() / self.width.max(1)
     }
 
     /// Last line shown completely.
@@ -260,25 +308,238 @@ impl Window {
         self.top = self.top.min(m.last_line());
         self.cursor.line = self.cursor.line.min(m.last_line());
         let cur = self.cursor.line;
+        let state = (cur, self.top, m.text.line_count(), m.rows(cur));
+        if self.keep_view.take() == Some(state) {
+            self.keep_view = Some(state);
+            self.update_skipcol(m);
+            return;
+        }
+        // Vim's `update_topline` with 'scrolloff' 0 and 'scrolljump' 1. Distances are in
+        // lines; the scroll functions then count rows.
+        let hidden_on_top = self.skipcol() > 0
+            && cur == self.top
+            && self.skipcol() + SMS_MARKER > m.cursor_vcol(cur, self.cursor.col, false);
+        if cur < self.top || hidden_on_top {
+            let halfheight = (self.height / 2).saturating_sub(1).max(2);
+            if self.top - cur >= halfheight {
+                self.top = self.halfway(cur, false, m);
+            } else {
+                self.scroll_cursor_top(m);
+            }
+        }
+        let (botline, _) = self.botline(m);
+        if botline < m.text.line_count() && cur >= botline {
+            if cur - botline < self.height + 1 {
+                self.scroll_cursor_bot(m);
+            } else {
+                self.top = self.halfway(cur, false, m);
+            }
+        }
+        self.update_skipcol(m);
+    }
+
+    /// The part of Vim's `curs_columns` that sets `w_skipcol`: when the cursor is on a top line
+    /// too tall for the window, scroll within the line so the cursor is shown; otherwise
+    /// nothing is skipped.
+    fn update_skipcol(&mut self, m: &Metrics) {
+        let cur = self.cursor.line;
+        if cur != self.top || self.height == 0 || self.width == 0 {
+            // Without 'smoothscroll' nothing is skipped unless the cursor needs it.
+            self.set_skipcol(0);
+            return;
+        }
+        let (w, h) = (self.width as isize, self.height as isize);
+        let vcol = m.cursor_vcol(cur, self.cursor.col, false) as isize;
+        let prev = self.skipcol() as isize;
+        let mut skip = prev;
+        let mut wcol = vcol;
+        let mut wrow = 0;
+        let mut did_sub = false;
+        if skip > 0 && wcol >= skip {
+            wcol -= w * (if skip <= w { 1 } else { (skip - w) / w + 1 });
+            did_sub = true;
+        }
+        if wcol >= w {
+            wrow += (wcol - w) / w + 1;
+        }
+        let plines = m.rows(cur) as isize;
+        if !(wrow >= h || (prev > 0 && plines > h)) {
+            self.set_skipcol(0);
+            return;
+        }
+        let mut extra = 0;
+        if skip > vcol {
+            extra = 1;
+        }
+        let plines = plines - 1;
+        let n = if plines > wrow { wrow } else { plines };
+        if n >= h + skip / w {
+            extra += 2;
+        }
+        if extra == 3 {
+            // Put the cursor in the middle.
+            let mut n = vcol / w;
+            n = if n > h / 2 { n - h / 2 } else { 0 };
+            n = n.min(plines - h + 1);
+            skip = if n > 0 { w + (n - 1) * w } else { 0 };
+        } else if extra == 1 {
+            let mut e = (skip - vcol + w - 1) / w;
+            if e > 0 {
+                if e * w > skip {
+                    e = skip / w;
+                }
+                skip -= e * w;
+            }
+        } else if extra == 2 {
+            let mut endcol = (n - h + 1) * w;
+            while endcol > vcol {
+                endcol -= w;
+            }
+            skip = skip.max(endcol);
+        }
+        if did_sub {
+            wrow -= (skip - prev) / w;
+        } else {
+            wrow -= skip / w;
+        }
+        if wrow >= h {
+            skip += (wrow - h + 1) * w;
+        }
+        self.set_skipcol(skip.max(0) as usize);
+    }
+
+    /// Vim's `w_botline` and `w_empty_rows`: the first line not completely shown, and the rows
+    /// left over below the last one that is (past the end of the buffer, or under a wrapped
+    /// line too tall to fit).
+    fn botline(&self, m: &Metrics) -> (usize, usize) {
+        let mut done = 0;
+        let mut line = self.top;
+        while line <= m.last_line() {
+            let mut n = m.rows(line);
+            if line == self.top {
+                n -= self.skip_rows().min(n);
+            }
+            // A line too tall for the window counts as filling it.
+            n = n.min(self.height);
+            if done + n > self.height {
+                break;
+            }
+            done += n;
+            line += 1;
+        }
+        (line, if done == 0 { 0 } else { self.height - done })
+    }
+
+    /// Vim's `scroll_cursor_top` for a cursor above the window: usually the cursor line
+    /// becomes the top line.
+    fn scroll_cursor_top(&mut self, m: &Metrics) {
+        let cur = self.cursor.line;
+        let mut used = m.rows(cur);
+        let mut scrolled = if cur < self.top { used } else { 0 };
+        let mut new_top = cur;
+        let mut top = cur;
+        while top > 0 {
+            let i = m.rows(top - 1);
+            if top - 1 < self.top {
+                scrolled += i;
+            }
+            if new_top >= self.top || scrolled > 1 {
+                break;
+            }
+            used += i;
+            if used > self.height {
+                break;
+            }
+            new_top = top - 1;
+            top -= 1;
+        }
+        if used > self.height {
+            self.top = self.halfway(cur, false, m);
+        } else if new_top < self.top {
+            self.top = new_top;
+        }
+    }
+
+    /// Vim's `scroll_cursor_bot` for a cursor a little below the window: scroll just enough
+    /// lines to show it, or put it in the middle when that would be a whole window's worth.
+    fn scroll_cursor_bot(&mut self, m: &Metrics) {
+        const MIN_SCROLL: isize = 1;
         let h = self.height;
-        if cur < self.top {
-            let distance = m.rows_between(cur..self.top, h);
-            let half = (h / 2).saturating_sub(1).max(2);
-            self.top = if distance >= half {
-                self.halfway(cur, false, m)
+        let count = m.text.line_count();
+        let rows = |line: usize| {
+            if line < count {
+                m.rows(line)
             } else {
-                cur
-            };
-        } else if cur > self.bottom(m) {
-            let bottom = self.bottom(m);
-            let distance = m.rows_between(bottom + 1..=cur, h + 1);
-            self.top = if distance > h + 1 {
-                self.halfway(cur, false, m)
-            } else if distance >= (h + 3) / 2 {
-                self.halfway(cur, true, m)
+                usize::MAX / 4
+            }
+        };
+        let cur = self.cursor.line;
+        let (botline, empty) = self.botline(m);
+        let empty = empty as isize;
+        let mut used = rows(cur);
+        let mut scrolled: isize = 0;
+        if cur >= botline {
+            scrolled = used as isize;
+            if cur == botline {
+                scrolled -= empty;
+            }
+        }
+        let (mut loff, mut boff) = (cur, cur);
+        while loff > 0 {
+            if (scrolled <= 0 || scrolled >= MIN_SCROLL || boff + 1 >= count) && loff <= botline {
+                break;
+            }
+            loff -= 1;
+            let height = rows(loff);
+            used += height;
+            if used > h {
+                break;
+            }
+            if loff >= botline {
+                scrolled += height as isize;
+                if loff == botline {
+                    scrolled -= empty;
+                }
+            }
+            if boff + 1 < count {
+                boff += 1;
+                let height = rows(boff);
+                used += height;
+                if used > h {
+                    break;
+                }
+                if scrolled < MIN_SCROLL && boff >= botline {
+                    scrolled += height as isize;
+                    if boff == botline {
+                        scrolled -= empty;
+                    }
+                }
+            }
+        }
+        let line_count = if scrolled <= 0 {
+            0
+        } else if used > h {
+            used
+        } else {
+            // Lines to scroll to move `scrolled` rows off the top.
+            let mut n = 0;
+            let mut rows_moved = 0;
+            let mut line = self.top;
+            while (rows_moved as isize) < scrolled && line < botline + 1 {
+                rows_moved += rows(line);
+                n += 1;
+                line += 1;
+            }
+            if (rows_moved as isize) < scrolled {
+                9999
             } else {
-                self.top.max(self.top_with_bottom(cur, m))
-            };
+                n
+            }
+        };
+        if line_count >= h && line_count as isize > MIN_SCROLL {
+            self.top = self.halfway(cur, true, m);
+        } else if line_count > 0 {
+            self.top = (self.top + line_count).min(m.last_line());
         }
     }
 
@@ -297,48 +558,58 @@ impl Window {
     }
 
     /// Top line that puts `cur` in the middle of the window. With an odd number of spare rows,
-    /// `prefer_above` puts the extra one above the cursor.
+    /// `prefer_above` puts the extra one above the cursor. `atend` counts the `~` rows past the
+    /// end of the buffer as used, which `zz` does and a jump doesn't.
     fn halfway(&self, cur: usize, prefer_above: bool, m: &Metrics) -> usize {
+        self.halfway_at(cur, prefer_above, false, m)
+    }
+
+    fn halfway_at(&self, cur: usize, prefer_above: bool, atend: bool, m: &Metrics) -> usize {
+        // Neovim's `scroll_cursor_halfway` without 'smoothscroll': each pass adds one line
+        // below and one above the cursor (above first with `prefer_above`), whatever their
+        // heights, until the window is full.
         let h = self.height;
         let mut used = m.rows(cur);
-        let (mut above, mut below) = (0, 0);
         let (mut top, mut bottom) = (cur, cur);
-        while top > 0 {
-            let add_below = if prefer_above {
-                below < above
-            } else {
-                below <= above
-            };
-            if add_below {
-                if bottom < m.last_line() {
-                    bottom += 1;
-                    let rows = m.rows(bottom);
-                    used += rows;
-                    if used > h {
-                        break;
-                    }
-                    below += rows;
+        'outer: while top > 0 {
+            for round in 1..=2 {
+                let (add_below, add_above) = if prefer_above {
+                    (round == 2, round == 1)
                 } else {
-                    // Past the end: count a `~` row without using up space.
-                    below += 1;
+                    (round == 1, round == 1)
+                };
+                if add_below {
+                    if bottom < m.last_line() {
+                        bottom += 1;
+                        used += m.rows(bottom);
+                        if used > h {
+                            break 'outer;
+                        }
+                    } else if atend {
+                        // Past the end: a `~` row, which only `atend` counts as used space.
+                        used += 1;
+                    }
                 }
-            }
-            let add_above = if prefer_above {
-                below >= above
-            } else {
-                below > above
-            };
-            if add_above {
-                let rows = m.rows(top - 1);
-                used += rows;
-                if used > h {
-                    break;
+                if add_above {
+                    used += m.rows(top - 1);
+                    if used > h {
+                        break 'outer;
+                    }
+                    top -= 1;
                 }
-                above += rows;
-                top -= 1;
             }
         }
         top
+    }
+
+    /// `zt`, `zz`, `zb`: put the cursor line at the top, middle or bottom of the window.
+    pub fn scroll_cursor_to(&mut self, at: char, m: &Metrics) {
+        let cur = self.cursor.line;
+        self.top = match at {
+            't' => cur,
+            'b' => self.top_with_bottom(cur, m),
+            _ => self.halfway_at(cur, false, true, m),
+        };
     }
 
     /// Keep the cursor inside the window after the view moved.
@@ -408,131 +679,341 @@ impl Window {
         true
     }
 
-    /// `CTRL-D`: scroll down 'scroll' screen rows and move the cursor down as many rows.
-    ///
-    /// Neovim scrolls with 'smoothscroll' on and, when that leaves the top line partly scrolled
-    /// off, backs up to the line's start and moves the cursor one row less. The view stops once
-    /// the last line reaches the bottom; the cursor keeps going.
-    pub fn scroll_half_down(&mut self, m: &Metrics) -> bool {
-        let count = self.scroll_amount();
-        let mut cursor_rows = count;
-        let rows_to_end = m.rows_between(self.top..=m.last_line(), self.height + count);
-        let scroll = if rows_to_end < self.height + count {
-            rows_to_end.saturating_sub(self.height)
-        } else {
-            count
-        };
-        if scroll > 0 {
-            let (mut line, mut sub) = (self.top, 0);
-            for _ in 0..scroll {
-                sub += 1;
-                if sub == m.rows(line) {
-                    line += 1;
-                    sub = 0;
-                }
-            }
-            if sub > 0 {
-                if line != self.top {
-                    cursor_rows -= 1;
-                } else {
-                    cursor_rows += m.rows(line) - sub;
-                    line += 1;
-                }
-            }
-            self.top = line.min(m.last_line());
-        }
-        let moved = self.move_screen_rows(true, cursor_rows, m);
-        self.clamp_cursor_to_view(m);
-        moved
+    /// `CTRL-D`: scroll down 'scroll' screen rows and move the cursor down as many rows. A
+    /// count sets 'scroll'.
+    pub fn scroll_half_down(&mut self, count: Option<usize>, m: &Metrics) -> bool {
+        self.pagescroll(true, count.unwrap_or(0), true, m)
     }
 
-    /// `CTRL-U`: the mirror image of `CTRL-D`. Scrolling back into a wrapped line that ends up
-    /// partly shown moves forward to the next line start instead.
-    pub fn scroll_half_up(&mut self, m: &Metrics) -> bool {
-        let count = self.scroll_amount();
-        let mut cursor_rows = count;
-        if self.top > 0 {
-            let (mut line, mut sub) = (self.top, 0);
-            for _ in 0..count {
-                if sub > 0 {
-                    sub -= 1;
-                } else if line > 0 {
-                    line -= 1;
-                    sub = m.rows(line) - 1;
+    /// `CTRL-U`: the mirror image of `CTRL-D`.
+    pub fn scroll_half_up(&mut self, count: Option<usize>, m: &Metrics) -> bool {
+        self.pagescroll(false, count.unwrap_or(0), true, m)
+    }
+
+    /// `CTRL-F`: scroll forward `count` pages, keeping up to two lines of overlap, and put the
+    /// cursor on the top line.
+    pub fn page_down(&mut self, count: Option<usize>, m: &Metrics) -> bool {
+        self.pagescroll(true, count.unwrap_or(1), false, m)
+    }
+
+    /// `CTRL-B`: scroll back `count` pages and put the cursor on the bottom line.
+    pub fn page_up(&mut self, count: Option<usize>, m: &Metrics) -> bool {
+        self.pagescroll(false, count.unwrap_or(1), false, m)
+    }
+
+    /// Neovim's `pagescroll`. The view scrolls by screen rows as with 'smoothscroll', then
+    /// finishes scrolling a partly shown top line. A half page moves the cursor as many screen
+    /// rows as the view moved (without revealing rows past the end); a whole page puts it at
+    /// the top (forward) or bottom (backward) of the window.
+    fn pagescroll(&mut self, forward: bool, count: usize, half: bool, m: &Metrics) -> bool {
+        self.update_curswant(m, false);
+        let (prev_cursor, prev_curswant) = (self.cursor, self.curswant);
+        let h = self.height;
+        let mut did_move = false;
+        self.valid_line = self.cursor.line;
+        self.topline_dirty = false;
+        if half {
+            if count > 0 {
+                self.scroll = count.min(h);
+            }
+            let mut count = self.scroll.min(h) as isize;
+            let mut curscount = count;
+            let lines = m.text.line_count();
+            if forward && self.top + 1 + h + count as usize > lines {
+                let cap = h + count as usize;
+                let mut n = m.rows(self.top) - self.skip_rows();
+                if (n as isize) - count < h as isize && self.top + 1 < lines {
+                    for line in self.top + 1..lines {
+                        if n >= cap {
+                            break;
+                        }
+                        n += m.rows(line);
+                    }
+                    n = n.min(cap);
+                }
+                if n < cap {
+                    count = n as isize - h as isize;
+                }
+            }
+            if count > 0 {
+                did_move = self.scroll_with_sms(forward, count as usize, &mut curscount, m);
+                self.cursor = prev_cursor;
+                self.curswant = prev_curswant;
+            }
+            self.move_screen_rows(forward, curscount.max(0) as usize, m);
+        } else {
+            let count = count.max(1) * self.scroll_overlap(forward, m);
+            let mut unused = 0;
+            did_move = self.scroll_with_sms(forward, count, &mut unused, m);
+            if did_move {
+                self.cursor.line = if forward {
+                    self.top
                 } else {
+                    self.botline(m).0.saturating_sub(1)
+                };
+            }
+        }
+        if !did_move && self.cursor == prev_cursor {
+            return false;
+        }
+        // 'nostartofline': keep the column.
+        self.coladvance(m);
+        self.check_cursor_moved();
+        if self.topline_dirty {
+            self.scroll_to_cursor(m);
+        } else {
+            // Neovim only revalidates the top line when the cursor was seen on another line,
+            // so a cursor line left partly shown stays that way.
+            let line = self.cursor.line;
+            self.keep_view = Some((line, self.top, m.text.line_count(), m.rows(line)));
+            self.update_skipcol(m);
+        }
+        true
+    }
+
+    /// Neovim's `scroll_with_sms`: scroll `count` rows, then scroll on (or back, if the top line
+    /// already changed) until no line is partly shown at the top, adjusting `curscount` by the
+    /// extra rows. True when the view moved.
+    fn scroll_with_sms(
+        &mut self,
+        forward: bool,
+        count: usize,
+        curscount: &mut isize,
+        m: &Metrics,
+    ) -> bool {
+        let (prev_top, prev_skip) = (self.top, self.skipcol());
+        self.sms_scroll(forward, count, m);
+        let skipcol = self.skipcol();
+        if skipcol > 0 {
+            // One line extra going backward so that consuming the partial line is symmetric.
+            let fix_forward = if self.top.abs_diff(prev_top) > usize::from(!forward) {
+                !forward
+            } else {
+                forward
+            };
+            let w = self.width.max(1) as isize;
+            let sc = skipcol as isize;
+            let count = if fix_forward {
+                1 + (m.width_of(self.top) as isize - sc - w + w - 1) / w
+            } else {
+                1 + (sc - w - 1) / w
+            };
+            let count = count.max(0);
+            self.sms_scroll(fix_forward, count as usize, m);
+            *curscount += if fix_forward == forward {
+                count
+            } else {
+                -count
+            };
+        }
+        self.top != prev_top || self.skipcol() != prev_skip
+    }
+
+    /// Neovim's `get_scroll_overlap`: rows to scroll for a page, less up to two lines that stay
+    /// in view.
+    fn scroll_overlap(&self, forward: bool, m: &Metrics) -> usize {
+        const TALL: i64 = 1 << 40;
+        let h = self.height as i64;
+        let min_height = h - 2;
+        let count = m.text.line_count() as i64;
+        let (botline, _) = self.botline(m);
+        if (!forward && self.top == 0) || (forward && botline as i64 >= count) {
+            return h as usize;
+        }
+        let rows = |line: i64| {
+            if line < 0 || line >= count {
+                TALL
+            } else {
+                m.rows(line as usize) as i64
+            }
+        };
+        let (start, step) = if forward {
+            (botline as i64, -1)
+        } else {
+            (self.top as i64 - 1, 1)
+        };
+        let h1 = rows(start);
+        if h1 > min_height {
+            return h as usize;
+        }
+        let h2 = rows(start + step);
+        if h2 + h1 > min_height {
+            return h as usize;
+        }
+        let h3 = rows(start + 2 * step);
+        if h3 + h2 > min_height {
+            return h as usize;
+        }
+        let h4 = rows(start + 3 * step);
+        if h4 + h3 + h2 > min_height || h3 + h2 + h1 > min_height {
+            (min_height + 1) as usize
+        } else {
+            min_height.max(0) as usize
+        }
+    }
+
+    /// Neovim's `scroll_redraw` with 'smoothscroll' on: scroll `count` screen rows, leaving
+    /// `skipcol` columns of the top line scrolled off, and keep the cursor in view.
+    fn sms_scroll(&mut self, up: bool, count: usize, m: &Metrics) {
+        let mut skip = self.skipcol();
+        let skipcol = &mut skip;
+        let prev_line = self.cursor.line;
+        let w = self.width.max(1);
+        let last = m.last_line();
+        if up {
+            // `scrollup`
+            let mut size = m.width_of(self.top);
+            for _ in 0..count {
+                let mut line = self.top;
+                *skipcol += w;
+                if *skipcol >= size {
+                    if line == last {
+                        *skipcol -= w;
+                        break;
+                    }
+                    line += 1;
+                }
+                if line > self.top {
+                    self.top = line;
+                    *skipcol = 0;
+                    size = m.width_of(self.top);
+                }
+            }
+            if self.cursor.line < self.top {
+                self.cursor.line = self.top;
+                self.coladvance(m);
+            }
+        } else {
+            // `scrolldown`
+            self.check_cursor_moved();
+            let old_wrow = self.cursor_wrow(m);
+            let mut done = 0;
+            for _ in 0..count {
+                if self.top == 0 && *skipcol < w {
                     break;
                 }
-            }
-            if sub > 0 {
-                if self.top - line > 1 {
-                    cursor_rows -= m.rows(line) - sub;
-                    line += 1;
+                done += 1;
+                if *skipcol >= w {
+                    *skipcol -= w;
                 } else {
-                    cursor_rows += sub;
+                    // The line above comes in showing only its last row.
+                    self.top -= 1;
+                    *skipcol = 0;
+                    let mut size = m.width_of(self.top);
+                    if size > w {
+                        *skipcol = w;
+                        size -= w;
+                    }
+                    while size > w {
+                        *skipcol += w;
+                        size -= w;
+                    }
                 }
             }
-            self.top = line;
-        }
-        let moved = self.move_screen_rows(false, cursor_rows, m);
-        self.clamp_cursor_to_view(m);
-        moved
-    }
-
-    /// `CTRL-F`: scroll forward a page, keeping two lines of overlap, and put the cursor on the top
-    /// line. When the last line is already visible, it scrolls to the top of the window.
-    pub fn page_down(&mut self, m: &Metrics) -> bool {
-        self.update_curswant(m, false);
-        let last = m.last_line();
-        if self.top == last {
-            return false;
-        }
-        if self.bottom(m) >= last {
-            self.top = last;
-        } else {
-            self.top = self.advance(self.top, self.height.saturating_sub(2).max(1), m);
-        }
-        self.place_on_line(self.top, m);
-        true
-    }
-
-    /// `CTRL-B`: scroll back a page, keeping two lines of overlap, and put the cursor on the bottom
-    /// line.
-    pub fn page_up(&mut self, m: &Metrics) -> bool {
-        self.update_curswant(m, false);
-        if self.top == 0 {
-            return false;
-        }
-        // Measured from nvim: with the last line at the top, CTRL-B goes back a full window.
-        let budget = if self.top == m.last_line() {
-            self.height
-        } else {
-            self.height.saturating_sub(2).max(1)
-        };
-        let mut used = 0;
-        while self.top > 0 {
-            let rows = m.rows(self.top - 1);
-            if used + rows > budget && used > 0 {
-                break;
+            // Move the cursor up until the last row of its line is in the window. Like Vim,
+            // line heights are capped at the window height.
+            let h = self.height;
+            let vcol = m.cursor_vcol(self.cursor.line, self.cursor.col, false);
+            let mut wrow = old_wrow + done + m.rows(self.cursor.line).min(h) as isize
+                - 1
+                - (vcol / w) as isize;
+            let mut moved = false;
+            while wrow >= h as isize && self.cursor.line > 0 {
+                wrow -= m.rows(self.cursor.line).min(h) as isize;
+                self.cursor.line -= 1;
+                moved = true;
             }
-            used += rows;
-            self.top -= 1;
+            if moved {
+                self.coladvance(m);
+            }
+            self.cursor.line = self.cursor.line.max(self.top);
         }
-        self.place_on_line(self.bottom(m), m);
-        true
+        self.set_skipcol(*skipcol);
+        self.cursor_correct_sms(*skipcol, m);
+        if self.cursor.line != prev_line {
+            self.coladvance(m);
+        }
     }
 
-    /// The line `budget` rows below `line`, moving at least one line.
-    fn advance(&self, mut line: usize, budget: usize, m: &Metrics) -> usize {
-        let mut used = 0;
-        while line < m.last_line() {
-            let rows = m.rows(line);
-            if used + rows > budget && used > 0 {
-                break;
-            }
-            used += rows;
-            line += 1;
+    /// Vim's `check_cursor_moved` during a page scroll: seeing the cursor on another line than
+    /// the last validated one invalidates the top line.
+    fn check_cursor_moved(&mut self) {
+        if self.cursor.line != self.valid_line {
+            self.topline_dirty = true;
+            self.valid_line = self.cursor.line;
         }
-        line
+    }
+
+    /// The window row of the cursor (Vim's `w_wrow`), with line heights capped at the window
+    /// height.
+    fn cursor_wrow(&self, m: &Metrics) -> isize {
+        let w = self.width.max(1);
+        let skip = self.skipcol();
+        let mut row = 0;
+        for line in self.top..self.cursor.line {
+            let mut n = m.rows(line);
+            if line == self.top {
+                n -= self.skip_rows().min(n);
+            }
+            row += n.min(self.height);
+        }
+        let mut wcol = m.cursor_vcol(self.cursor.line, self.cursor.col, false);
+        if self.cursor.line == self.top && skip > 0 && wcol >= skip {
+            wcol -= w * if skip <= w { 1 } else { (skip - w) / w + 1 };
+        }
+        if wcol >= w {
+            row += (wcol - w) / w + 1;
+        }
+        row as isize
+    }
+
+    /// Neovim's `cursor_correct_sms` with 'scrolloff' 0: on a partly shown top line, move the
+    /// cursor to a screen row that is shown, changing `curswant`.
+    fn cursor_correct_sms(&mut self, skipcol: usize, m: &Metrics) {
+        if self.cursor.line != self.top {
+            return;
+        }
+        self.check_cursor_moved();
+        let w = self.width.max(1);
+        // The `<<<` marker covers the start of a partly shown line.
+        let overlap = if skipcol == 0 { 0 } else { 3 };
+        let top = skipcol + overlap;
+        let bot = skipcol + w + self.height.saturating_sub(1) * w;
+        let vcol = m.cursor_vcol(self.cursor.line, self.cursor.col, false);
+        let mut col = vcol;
+        if col < top {
+            if col < w {
+                col += w;
+            }
+            while col < top {
+                col += w;
+            }
+        } else {
+            while col >= bot {
+                col -= w;
+            }
+        }
+        if col != vcol {
+            self.curswant = col;
+            let failed = !self.coladvance(m);
+            if failed && skipcol > 0 && self.cursor.line < m.last_line() {
+                let vcol = m.cursor_vcol(self.cursor.line, self.cursor.col, false);
+                if vcol < skipcol + overlap {
+                    // Still not visible: go to the next line instead.
+                    self.cursor.line += 1;
+                    self.cursor.col = 0;
+                    self.curswant = 0;
+                }
+            }
+        }
+    }
+
+    /// Vim's `coladvance(curswant)` on the cursor line; false when the line is too short to
+    /// reach it.
+    fn coladvance(&mut self, m: &Metrics) -> bool {
+        self.place_on_line(self.cursor.line, m);
+        let width = m.width_of(self.cursor.line);
+        self.curswant < width || (width == 0 && self.curswant == 0)
     }
 }
 
@@ -572,7 +1053,7 @@ mod tests {
 
     /// Window at 1-based `top`/`cur`, as in the nvim probes.
     fn win(top: usize, cur: usize) -> Window {
-        let mut w = Window::new(BufferId(0), 80, H);
+        let mut w = Window::new(crate::WindowId(1000), BufferId(1), 80, H);
         w.top = top - 1;
         w.cursor.line = cur - 1;
         w
@@ -635,7 +1116,7 @@ mod tests {
         ];
         for (from, to) in cases_d {
             let mut w = win(from.0, from.1);
-            w.scroll_half_down(&m);
+            w.scroll_half_down(None, &m);
             assert_eq!(pos(&w), to, "CTRL-D from {from:?}");
         }
         let cases_u = [
@@ -648,7 +1129,7 @@ mod tests {
         ];
         for (from, to) in cases_u {
             let mut w = win(from.0, from.1);
-            w.scroll_half_up(&m);
+            w.scroll_half_up(None, &m);
             assert_eq!(pos(&w), to, "CTRL-U from {from:?}");
         }
     }
@@ -659,12 +1140,12 @@ mod tests {
         let m = metrics(&text);
         for (top, to) in [(1, 21), (170, 190), (179, 200), (190, 200), (199, 200)] {
             let mut w = win(top, top);
-            assert!(w.page_down(&m));
+            assert!(w.page_down(None, &m));
             assert_eq!(pos(&w), (to, to), "CTRL-F from {top}");
         }
-        assert!(!win(200, 200).page_down(&m));
+        assert!(!win(200, 200).page_down(None, &m));
         let mut w = win(30, 40);
-        w.page_down(&m);
+        w.page_down(None, &m);
         assert_eq!(pos(&w), (50, 50));
         for ((top, cur), to) in [
             ((200, 200), (178, 199)),
@@ -674,7 +1155,7 @@ mod tests {
             ((2, 3), (1, 22)),
         ] {
             let mut w = win(top, cur);
-            assert!(w.page_up(&m));
+            assert!(w.page_up(None, &m));
             assert_eq!(pos(&w), to, "CTRL-B from {top},{cur}");
         }
     }
@@ -726,11 +1207,11 @@ mod tests {
         let text = numbered(10);
         let m = metrics(&text);
         let mut w = win(1, 1);
-        w.scroll_half_down(&m);
+        w.scroll_half_down(None, &m);
         assert_eq!(pos(&w), (1, 10));
-        w.page_down(&m);
+        w.page_down(None, &m);
         assert_eq!(pos(&w), (10, 10));
-        w.page_up(&m);
+        w.page_up(None, &m);
         assert_eq!(pos(&w), (1, 10));
     }
 
@@ -743,12 +1224,12 @@ mod tests {
         assert_eq!(pos(&w), (15, 21));
         w.set_cursor_line(22, &m);
         assert_eq!(pos(&w), (15, 23));
-        w.scroll_half_down(&m);
+        w.scroll_half_down(None, &m);
         assert_eq!(pos(&w), (21, 29));
         w.set_cursor_line(39, &m);
         assert_eq!(pos(&w), (28, 40));
         w.set_cursor_line(0, &m);
-        w.page_down(&m);
+        w.page_down(None, &m);
         assert_eq!(pos(&w), (13, 13));
     }
 }

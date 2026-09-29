@@ -372,9 +372,14 @@ pub fn eval(motion: Motion, cx: &Context) -> Option<Target> {
 }
 
 /// Where mark `name` is: a letter, `'`/`` ` `` (the last jump), or one of Vim's automatic marks.
-fn mark_position(editor: &Editor, name: char) -> Option<Pos> {
+pub(crate) fn mark_position(editor: &Editor, name: char) -> Option<Pos> {
     match name {
         '\'' | '`' => editor.window.pcmark.or(Some(pos(0, 0))),
+        'A'..='Z' => editor
+            .global_marks
+            .get(&name)
+            .filter(|&&(b, _)| b == editor.window.buffer)
+            .map(|&(_, p)| p),
         _ => editor.current_buffer().marks.get(name),
     }
 }

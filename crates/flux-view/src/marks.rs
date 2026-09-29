@@ -112,10 +112,17 @@ impl LineShift {
     }
 }
 
+/// A position in the jumplist: which buffer, and where.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Jump {
+    pub buffer: crate::BufferId,
+    pub pos: Cursor,
+}
+
 /// Positions jumped from (Vim's jumplist), for `CTRL-O` and `CTRL-I`.
 #[derive(Debug, Clone, Default)]
 pub struct JumpList {
-    entries: Vec<Cursor>,
+    entries: Vec<Jump>,
     /// Where `CTRL-O`/`CTRL-I` are in the list; `entries.len()` when at the newest end.
     idx: usize,
 }
@@ -123,9 +130,9 @@ pub struct JumpList {
 const JUMPLIST_SIZE: usize = 100;
 
 impl JumpList {
-    /// Remember `pos` as a place jumped from (Vim's `setpcmark`).
-    pub fn push(&mut self, pos: Cursor) {
-        self.entries.push(pos);
+    /// Remember a position as a place jumped from (Vim's `setpcmark`).
+    pub fn push(&mut self, jump: Jump) {
+        self.entries.push(jump);
         if self.entries.len() > JUMPLIST_SIZE {
             self.entries.remove(0);
         }
@@ -133,7 +140,7 @@ impl JumpList {
     }
 
     /// Move `count` entries back (negative: forward) from `current`, returning where to go.
-    pub fn jump(&mut self, count: isize, current: Cursor) -> Option<Cursor> {
+    pub fn jump(&mut self, count: isize, current: Jump) -> Option<Jump> {
         self.cleanup();
         if self.entries.is_empty() {
             return None;
@@ -155,12 +162,15 @@ impl JumpList {
         self.entries.get(self.idx).copied()
     }
 
-    /// Drop older entries on the same line as a newer one, keeping `idx` on the same entry.
+    /// Drop older entries on the same line of the same buffer as a newer one, keeping `idx` on
+    /// the same entry.
     fn cleanup(&mut self) {
         let mut kept = Vec::with_capacity(self.entries.len());
         let mut new_idx = self.idx;
         for (i, e) in self.entries.iter().enumerate() {
-            let later_same_line = self.entries[i + 1..].iter().any(|l| l.line == e.line);
+            let later_same_line = self.entries[i + 1..]
+                .iter()
+                .any(|l| l.buffer == e.buffer && l.pos.line == e.pos.line);
             if later_same_line {
                 if i < self.idx {
                     new_idx -= 1;
@@ -173,16 +183,28 @@ impl JumpList {
         self.idx = new_idx.min(self.entries.len());
     }
 
-    pub fn adjust(&mut self, shift: &LineShift) {
-        for e in &mut self.entries {
-            *e = shift.adjust(*e).unwrap_or(Cursor {
+    /// Move entries in `buffer` for an edit.
+    pub fn adjust(&mut self, buffer: crate::BufferId, shift: &LineShift) {
+        for e in self.entries.iter_mut().filter(|e| e.buffer == buffer) {
+            e.pos = shift.adjust(e.pos).unwrap_or(Cursor {
                 line: shift.line,
                 col: 0,
             });
         }
     }
 
-    pub fn entries(&self) -> (&[Cursor], usize) {
+    /// Forget entries in a buffer that no longer exists.
+    pub fn remove_buffer(&mut self, buffer: crate::BufferId) {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.buffer != buffer);
+        self.idx = self
+            .idx
+            .saturating_sub(before - self.entries.len())
+            .min(self.entries.len());
+    }
+
+    pub fn entries(&mut self) -> (&[Jump], usize) {
+        self.cleanup();
         (&self.entries, self.idx)
     }
 }
@@ -215,22 +237,29 @@ mod tests {
         assert_eq!(m.get('z'), None);
     }
 
+    fn j(line: usize, col: usize) -> Jump {
+        Jump {
+            buffer: crate::BufferId(1),
+            pos: p(line, col),
+        }
+    }
+
     #[test]
     fn jumplist_back_and_forth() {
-        let mut j = JumpList::default();
-        j.push(p(0, 0)); // G from line 0
-        assert_eq!(j.jump(1, p(4, 0)), Some(p(0, 0)));
-        assert_eq!(j.jump(-1, p(0, 0)), Some(p(4, 0)));
-        assert_eq!(j.jump(-1, p(4, 0)), None);
+        let mut list = JumpList::default();
+        list.push(j(0, 0)); // G from line 0
+        assert_eq!(list.jump(1, j(4, 0)), Some(j(0, 0)));
+        assert_eq!(list.jump(-1, j(0, 0)), Some(j(4, 0)));
+        assert_eq!(list.jump(-1, j(4, 0)), None);
     }
 
     #[test]
     fn jumplist_drops_duplicate_lines() {
-        let mut j = JumpList::default();
-        j.push(p(1, 0));
-        j.push(p(2, 0));
-        j.push(p(1, 3));
-        assert_eq!(j.jump(1, p(5, 0)), Some(p(1, 3)));
-        assert_eq!(j.jump(1, p(1, 3)), Some(p(2, 0)));
+        let mut list = JumpList::default();
+        list.push(j(1, 0));
+        list.push(j(2, 0));
+        list.push(j(1, 3));
+        assert_eq!(list.jump(1, j(5, 0)), Some(j(1, 3)));
+        assert_eq!(list.jump(1, j(1, 3)), Some(j(2, 0)));
     }
 }

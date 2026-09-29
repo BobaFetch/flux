@@ -42,6 +42,14 @@ pub struct Buffer {
     /// would corrupt it.
     pub invalid_utf8: bool,
     pub marks: crate::Marks,
+    /// Shown by `:ls` (`:bdelete` unlists a buffer; it keeps its number).
+    pub listed: bool,
+    /// The file has been read. Buffers named on the command line are read when first shown.
+    pub loaded: bool,
+    /// Where the cursor was in each window that showed this buffer, most recent first, to go
+    /// back there when the buffer is shown again (Vim's `wininfo`). `None` is Vim's line 0: the
+    /// buffer was created in that window and never left there.
+    pub positions: Vec<(crate::WindowId, Option<crate::Cursor>)>,
     /// The last Visual selection, for `gv`: anchor, cursor, kind and whether it went to the end
     /// of lines (`$`).
     pub last_visual: Option<(crate::Cursor, crate::Cursor, crate::VisualKind, bool)>,
@@ -59,6 +67,9 @@ impl Buffer {
             uncommitted: false,
             invalid_utf8: false,
             marks: Default::default(),
+            listed: true,
+            loaded: true,
+            positions: Vec::new(),
             last_visual: None,
             disk: None,
         }
@@ -78,6 +89,91 @@ impl Buffer {
             Err(e) => return Err(e),
         }
         Ok(buffer)
+    }
+
+    /// A buffer for `path` that will be read when first shown.
+    pub fn unloaded(id: BufferId, path: &Path) -> Self {
+        let mut buffer = Self::scratch(id);
+        buffer.path = Some(path.to_path_buf());
+        buffer.loaded = false;
+        buffer
+    }
+
+    /// Read the file of an unloaded buffer.
+    pub fn load(&mut self) -> io::Result<()> {
+        if self.loaded {
+            return Ok(());
+        }
+        let path = self.path.clone().ok_or(io::ErrorKind::NotFound)?;
+        let fresh = Self::open(self.id, &path)?;
+        *self = Self {
+            listed: self.listed,
+            positions: std::mem::take(&mut self.positions),
+            ..fresh
+        };
+        Ok(())
+    }
+
+    /// Forget the text (for `:bdelete`); the buffer keeps its number, name and marks.
+    pub fn unload(&mut self) {
+        self.text = Text::default();
+        self.history = History::default();
+        self.uncommitted = false;
+        self.loaded = false;
+    }
+
+    /// Where to put the cursor when the buffer is shown in `win`.
+    pub fn last_position(&self, win: crate::WindowId) -> Option<crate::Cursor> {
+        self.position_entry(win).and_then(|&(_, p)| p)
+    }
+
+    /// Vim's `find_wininfo`: the entry for `win`, or else the most recent one.
+    fn position_entry(
+        &self,
+        win: crate::WindowId,
+    ) -> Option<&(crate::WindowId, Option<crate::Cursor>)> {
+        self.positions
+            .iter()
+            .find(|(w, _)| *w == win)
+            .or(self.positions.first())
+    }
+
+    /// The line `:ls` shows for this buffer when it isn't current (Vim's `buflist_findlnum`):
+    /// 0 for a buffer never left in a window, 1 when it has no position at all.
+    pub fn listed_line(&self, win: crate::WindowId) -> usize {
+        match self.position_entry(win) {
+            Some((_, Some(p))) => p.line + 1,
+            Some((_, None)) => 0,
+            None => 1,
+        }
+    }
+
+    /// The buffer was just created in `win` (Vim's `buflist_new`).
+    pub fn created_in(&mut self, win: crate::WindowId) {
+        if !self.positions.iter().any(|(w, _)| *w == win) {
+            self.positions.insert(0, (win, None));
+        }
+    }
+
+    /// The buffer is being left in `win` with the cursor at `pos` (Vim's `buflist_altfpos`).
+    pub fn remember_position(&mut self, win: crate::WindowId, pos: crate::Cursor) {
+        self.positions.retain(|(w, _)| *w != win);
+        self.positions.insert(0, (win, Some(pos)));
+    }
+
+    /// `win`, showing this buffer, is closing (Vim's `close_buffer`): the first line doesn't
+    /// replace a position already known for the window.
+    pub fn window_closed(&mut self, win: crate::WindowId, pos: crate::Cursor) {
+        let old = self
+            .positions
+            .iter()
+            .position(|(w, _)| *w == win)
+            .map(|i| self.positions.remove(i));
+        let entry = match old {
+            Some((_, p)) if pos.line == 0 => p,
+            _ => Some(pos),
+        };
+        self.positions.insert(0, (win, entry));
     }
 
     /// The name Vim shows for the buffer.
@@ -271,7 +367,7 @@ mod tests {
     fn buffer_with(contents: &[u8]) -> Buffer {
         let path = temp_path("f.txt");
         fs::write(&path, contents).unwrap();
-        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        let mut buf = Buffer::open(BufferId(1), &path).unwrap();
         buf.path = Some("f.txt".into());
         buf
     }
@@ -286,7 +382,7 @@ mod tests {
 
     #[test]
     fn missing_file_is_new() {
-        let buf = Buffer::open(BufferId(0), Path::new("/nonexistent/flux/x.txt")).unwrap();
+        let buf = Buffer::open(BufferId(1), Path::new("/nonexistent/flux/x.txt")).unwrap();
         assert!(buf.new_file);
         assert_eq!(buf.file_info(), "\"/nonexistent/flux/x.txt\" [New]");
     }
@@ -295,7 +391,7 @@ mod tests {
     fn invalid_utf8_is_flagged_and_not_written_back() {
         let path = temp_path("bad.txt");
         fs::write(&path, b"ok\xff\n").unwrap();
-        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        let mut buf = Buffer::open(BufferId(1), &path).unwrap();
         assert!(buf.invalid_utf8);
         assert!(buf.write(None, false).unwrap_err().starts_with("E513"));
         assert_eq!(fs::read(&path).unwrap(), b"ok\xff\n");
@@ -305,7 +401,7 @@ mod tests {
     fn write_round_trips_and_marks_saved() {
         let path = temp_path("w.txt");
         fs::write(&path, "one\r\ntwo\r\n").unwrap();
-        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        let mut buf = Buffer::open(BufferId(1), &path).unwrap();
         let inverse = buf.text.apply(&Edit::insert(0, "zero\n"));
         buf.history.record(Change {
             edits: vec![Edit::insert(0, "zero\n")],
@@ -327,7 +423,7 @@ mod tests {
     fn write_refuses_after_external_change() {
         let path = temp_path("ext.txt");
         fs::write(&path, "a\n").unwrap();
-        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        let mut buf = Buffer::open(BufferId(1), &path).unwrap();
         fs::write(&path, "changed elsewhere\n").unwrap();
         assert!(buf.changed_on_disk());
         assert!(buf.write(None, false).unwrap_err().starts_with("WARNING"));
@@ -339,7 +435,7 @@ mod tests {
     #[test]
     fn write_new_file_and_to_other_path() {
         let path = temp_path("new.txt");
-        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        let mut buf = Buffer::open(BufferId(1), &path).unwrap();
         assert!(
             buf.write(None, false)
                 .unwrap()
@@ -365,7 +461,7 @@ mod tests {
         fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
         let link = real.with_file_name("link.txt");
         symlink(&real, &link).unwrap();
-        let mut buf = Buffer::open(BufferId(0), &link).unwrap();
+        let mut buf = Buffer::open(BufferId(1), &link).unwrap();
         buf.write(None, true).unwrap();
         assert!(
             fs::symlink_metadata(&link)
@@ -383,7 +479,7 @@ mod tests {
     fn reload_is_undoable() {
         let path = temp_path("r.txt");
         fs::write(&path, "old\n").unwrap();
-        let mut buf = Buffer::open(BufferId(0), &path).unwrap();
+        let mut buf = Buffer::open(BufferId(1), &path).unwrap();
         fs::write(&path, "new\n").unwrap();
         buf.reload((0, 0)).unwrap();
         assert_eq!(buf.text.line_str(0), "new");

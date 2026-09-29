@@ -129,10 +129,23 @@ impl Grid {
     }
 
     /// Write `s` from `(x, y)`, clipped at the right edge. Returns the column after the text.
-    pub fn put_str(&mut self, mut x: usize, y: usize, s: &str, style: Style) -> usize {
+    pub fn put_str(&mut self, x: usize, y: usize, s: &str, style: Style) -> usize {
+        self.put_str_until(x, y, s, style, self.width)
+    }
+
+    /// Write `s` from `(x, y)`, clipped before column `end`. Returns the column after the text.
+    pub fn put_str_until(
+        &mut self,
+        mut x: usize,
+        y: usize,
+        s: &str,
+        style: Style,
+        end: usize,
+    ) -> usize {
+        let end = end.min(self.width);
         for grapheme in s.graphemes(true) {
             let width = grapheme.width().clamp(1, 2);
-            if x + width > self.width {
+            if x + width > end {
                 break;
             }
             self.set(x, y, grapheme, width as u8, style);

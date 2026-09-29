@@ -110,6 +110,55 @@ pub enum Action {
     Reselect,
     /// `gi`
     InsertAtLastInsert,
+    /// `CTRL-W {key}`
+    Window(WinCmd),
+    /// `zt`, `zz`, `zb` (and `z<CR>`, `z.`, `z-`, which also go to the first non-blank).
+    ScrollCursor {
+        at: ScreenPos,
+        first_non_blank: bool,
+    },
+    /// `CTRL-^`: the alternate buffer, or buffer `count`.
+    AlternateBuffer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenPos {
+    Top,
+    Middle,
+    Bottom,
+}
+
+/// Window commands (`CTRL-W` followed by a key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WinCmd {
+    Split,
+    VSplit,
+    New,
+    /// `CTRL-W ^`: split and edit the alternate buffer.
+    SplitAlternate,
+    Close,
+    Quit,
+    Only,
+    Next,
+    Prev,
+    Previous,
+    Top,
+    Bottom,
+    /// `h`, `j`, `k`, `l`.
+    Go(char),
+    Taller,
+    Shorter,
+    SetHeight,
+    Wider,
+    Narrower,
+    SetWidth,
+    Equalize,
+    Exchange,
+    Rotate {
+        down: bool,
+    },
+    /// `H`, `J`, `K`, `L`.
+    Move(char),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,8 +264,40 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
     }
 
     let key = k.next()?;
+    if key == Key::ctrl('w') {
+        return Ok(window_command(k.next()?).map(|cmd| (register, count, Action::Window(cmd))));
+    }
     let action = match key.typed_char() {
         Some(c) => match c {
+            'z' => match k.next()? {
+                key if key == Key::plain(KeyCode::Enter) => Some(Action::ScrollCursor {
+                    at: ScreenPos::Top,
+                    first_non_blank: true,
+                }),
+                key => match key.typed_char() {
+                    Some('t') => Some(Action::ScrollCursor {
+                        at: ScreenPos::Top,
+                        first_non_blank: false,
+                    }),
+                    Some('z') => Some(Action::ScrollCursor {
+                        at: ScreenPos::Middle,
+                        first_non_blank: false,
+                    }),
+                    Some('b') => Some(Action::ScrollCursor {
+                        at: ScreenPos::Bottom,
+                        first_non_blank: false,
+                    }),
+                    Some('.') => Some(Action::ScrollCursor {
+                        at: ScreenPos::Middle,
+                        first_non_blank: true,
+                    }),
+                    Some('-') => Some(Action::ScrollCursor {
+                        at: ScreenPos::Bottom,
+                        first_non_blank: true,
+                    }),
+                    _ => None,
+                },
+            },
             'd' => operator(k, Operator::Delete, 'd', &mut count)?,
             'c' => operator(k, Operator::Change, 'c', &mut count)?,
             'y' => operator(k, Operator::Yank, 'y', &mut count)?,
@@ -322,6 +403,7 @@ fn control_key(key: Key) -> Option<Action> {
             KeyCode::Char('l') => Some(Action::Redraw),
             KeyCode::Char('o') => Some(Action::Jump { older: true }),
             KeyCode::Char('i') => Some(Action::Jump { older: false }),
+            KeyCode::Char('^') | KeyCode::Char('6') => Some(Action::AlternateBuffer),
             _ => None,
         };
     }
@@ -369,6 +451,66 @@ fn operator(
         return Ok(obj.map(|o| Action::Operate(op, OpTarget::Object(o))));
     }
     Ok(motion(k, key)?.map(|m| Action::Operate(op, OpTarget::Motion(m))))
+}
+
+/// The key after `CTRL-W`. Most also work with CTRL held (`CTRL-W CTRL-J`).
+fn window_command(key: Key) -> Option<WinCmd> {
+    use WinCmd as W;
+    let c = match (key.code, key.mods) {
+        (KeyCode::Char(c), Modifiers::NONE) => c,
+        (KeyCode::Char(c), Modifiers::CTRL) => match c {
+            's' => 's',
+            'v' => 'v',
+            'n' => 'n',
+            'q' => 'q',
+            'o' => 'o',
+            'w' => 'w',
+            'p' => 'p',
+            't' => 't',
+            'b' => 'b',
+            'h' => 'h',
+            'j' => 'j',
+            'k' => 'k',
+            'l' => 'l',
+            'x' => 'x',
+            'r' => 'r',
+            '_' => '_',
+            '^' | '6' => '^',
+            _ => return None,
+        },
+        (KeyCode::Left, _) | (KeyCode::Backspace, _) => 'h',
+        (KeyCode::Down, _) => 'j',
+        (KeyCode::Up, _) => 'k',
+        (KeyCode::Right, _) => 'l',
+        _ => return None,
+    };
+    Some(match c {
+        's' | 'S' => W::Split,
+        'v' => W::VSplit,
+        'n' => W::New,
+        '^' => W::SplitAlternate,
+        'c' => W::Close,
+        'q' => W::Quit,
+        'o' => W::Only,
+        'w' => W::Next,
+        'W' => W::Prev,
+        'p' => W::Previous,
+        't' => W::Top,
+        'b' => W::Bottom,
+        'h' | 'j' | 'k' | 'l' => W::Go(c),
+        '+' => W::Taller,
+        '-' => W::Shorter,
+        '_' => W::SetHeight,
+        '>' => W::Wider,
+        '<' => W::Narrower,
+        '|' => W::SetWidth,
+        '=' => W::Equalize,
+        'x' => W::Exchange,
+        'r' => W::Rotate { down: true },
+        'R' => W::Rotate { down: false },
+        'H' | 'J' | 'K' | 'L' => W::Move(c),
+        _ => return None,
+    })
 }
 
 fn g_motion(c: char) -> Option<Motion> {

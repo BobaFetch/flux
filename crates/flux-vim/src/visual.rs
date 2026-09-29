@@ -200,10 +200,10 @@ impl Engine {
                     match s {
                         parse::Scroll::LinesDown => win.scroll_lines_down(count.unwrap_or(1), m),
                         parse::Scroll::LinesUp => win.scroll_lines_up(count.unwrap_or(1), m),
-                        parse::Scroll::HalfDown => win.scroll_half_down(m),
-                        parse::Scroll::HalfUp => win.scroll_half_up(m),
-                        parse::Scroll::PageDown => win.page_down(m),
-                        parse::Scroll::PageUp => win.page_up(m),
+                        parse::Scroll::HalfDown => win.scroll_half_down(count, m),
+                        parse::Scroll::HalfUp => win.scroll_half_up(count, m),
+                        parse::Scroll::PageDown => win.page_down(count, m),
+                        parse::Scroll::PageUp => win.page_up(count, m),
                     };
                 });
             }
