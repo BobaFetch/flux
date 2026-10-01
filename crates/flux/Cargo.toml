@@ -19,7 +19,7 @@ flux-tui.workspace = true
 anyhow.workspace = true
 crossterm.workspace = true
 futures.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
 
 [lints]
 workspace = true

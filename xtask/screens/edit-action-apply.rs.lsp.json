@@ -1,0 +1,11 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8", "codeActionProvider": true },
+  "on": {
+    "textDocument/codeAction": { "result": [
+      { "title": "Inline variable", "kind": "refactor.inline", "edit": { "changes": { "$URI": [
+        { "range": { "start": { "line": 1, "character": 4 }, "end": { "line": 2, "character": 9 } }, "newText": "(a + b)" } ] } } },
+      { "title": "Rename to `sum`", "kind": "refactor", "edit": { "changes": { "$URI": [
+        { "range": { "start": { "line": 1, "character": 8 }, "end": { "line": 1, "character": 13 } }, "newText": "sum" } ] } } }
+    ] }
+  }
+}

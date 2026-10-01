@@ -22,7 +22,8 @@ impl Engine {
             | LspCmd::TypeDefinition
             | LspCmd::DocumentSymbol
             | LspCmd::Definition => super::locations::request(editor, cmd),
-            _ => {}
+            LspCmd::Rename => super::rename::start(self, editor),
+            LspCmd::CodeAction => super::code_action::request(editor),
         }
     }
 }

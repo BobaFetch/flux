@@ -1,0 +1,4 @@
+:lsp disable fake
+keys: Enter
+:lsp enable
+keys: Enter

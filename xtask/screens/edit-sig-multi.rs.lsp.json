@@ -1,0 +1,9 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-16", "signatureHelpProvider": { "triggerCharacters": ["("] } },
+  "on": {
+    "textDocument/signatureHelp": { "result": {
+      "signatures": [ { "label": "compute(a)", "parameters": [ { "label": [8, 9] } ] },
+                      { "label": "compute(a, b)", "parameters": [ { "label": [8, 9] }, { "label": [11, 12] } ], "activeParameter": 1 } ],
+      "activeSignature": 1 } }
+  }
+}

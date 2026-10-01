@@ -1,0 +1,9 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8", "documentRangeFormattingProvider": true },
+  "on": {
+    "textDocument/rangeFormatting": { "result": [
+      { "range": { "start": { "line": 1, "character": 13 }, "end": { "line": 1, "character": 18 } }, "newText": " = a + b" },
+      { "range": { "start": { "line": 2, "character": 0 }, "end": { "line": 2, "character": 13 } }, "newText": "    total * 2" }
+    ] }
+  }
+}

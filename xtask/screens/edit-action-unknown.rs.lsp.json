@@ -1,0 +1,75 @@
+{
+ "capabilities": {
+  "textDocumentSync": {
+   "openClose": true,
+   "change": 2
+  },
+  "positionEncoding": "utf-8",
+  "codeActionProvider": true,
+  "executeCommandProvider": {
+   "commands": [
+    "fake.apply"
+   ]
+  }
+ },
+ "on": {
+  "textDocument/codeAction": {
+   "result": [
+    {
+     "title": "Run a command",
+     "command": "fake.apply",
+     "arguments": [
+      1
+     ]
+    },
+    {
+     "title": "Needs resolving\nsecond line",
+     "kind": "quickfix"
+    },
+    {
+     "title": "Unknown command",
+     "command": {
+      "title": "x",
+      "command": "fake.unknown"
+     }
+    },
+    {
+     "title": "Disabled one",
+     "disabled": {
+      "reason": "Not here"
+     }
+    }
+   ]
+  },
+  "workspace/executeCommand": {
+   "result": null,
+   "send": [
+    {
+     "id": 99,
+     "method": "workspace/applyEdit",
+     "params": {
+      "edit": {
+       "changes": {
+        "$URI": [
+         {
+          "range": {
+           "start": {
+            "line": 6,
+            "character": 0
+           },
+           "end": {
+            "line": 6,
+            "character": 0
+           }
+          },
+          "newText": "    // ran\n"
+         }
+        ]
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}

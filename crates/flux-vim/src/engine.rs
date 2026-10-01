@@ -66,6 +66,8 @@ pub struct Engine {
     pub(crate) global_subs: (usize, usize),
     /// The command line being run, as typed (output that starts below it shows it too).
     pub(crate) typed_cmdline: Option<String>,
+    /// A question waiting for its answer (`input()`, `inputlist()`).
+    pub(crate) prompt: Option<crate::prompt::Prompt>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +132,12 @@ impl Engine {
     /// A key, typed or replayed (macros, `.`).
     pub(crate) fn process_key(&mut self, editor: &mut Editor, key: Key) {
         editor.keep_msg = false;
+        if self.prompt.is_some() && self.prompt_key(editor, key) {
+            editor.check_floats();
+            editor.refresh_window_widths();
+            editor.with_window(|win, m| win.scroll_to_cursor(m));
+            return;
+        }
         if self.confirm_sub.is_some() {
             self.confirm_key(editor, key);
             editor.with_window(|win, m| win.scroll_to_cursor(m));
@@ -516,6 +524,18 @@ impl Engine {
         builder.inverse.push(inverse);
     }
 
+    /// An undo step is being built.
+    pub(crate) fn has_change(&self) -> bool {
+        self.change.is_some()
+    }
+
+    /// Have undo put the cursor back at `p` for the step being built (where `gq` was typed).
+    pub(crate) fn set_undo_cursor(&mut self, p: Pos) {
+        if let Some(b) = self.change.as_mut() {
+            b.cursor_before = (p.line, p.col);
+        }
+    }
+
     /// Finish the undo step being built, if any.
     pub(crate) fn commit(&mut self, editor: &mut Editor) {
         if self.hold_undo > 0 {
@@ -685,7 +705,7 @@ impl Engine {
         }
     }
 
-    fn cmdline_edit(&mut self, editor: &mut Editor, key: Key) {
+    pub(crate) fn cmdline_edit(&mut self, editor: &mut Editor, key: Key) {
         if std::mem::take(&mut self.cmdline_register) {
             if let Some(name) = key.typed_char()
                 && let Some(reg) = editor.register(Some(name))

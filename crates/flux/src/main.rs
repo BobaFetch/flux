@@ -47,18 +47,22 @@ fn main() -> Result<()> {
     // the configs given to `vim.lsp.enable`).
     // `$FLUX_LSP_CONFIG` names a JSON list of configs to use instead (for testing, until
     // configs can be set in Lua).
-    editor.lsp.enabled = match std::env::var_os("FLUX_LSP_CONFIG") {
+    editor.lsp.configs = match std::env::var_os("FLUX_LSP_CONFIG") {
         Some(path) => flux_lsp::config::from_json_file(std::path::Path::new(&path))
             .map_err(anyhow::Error::msg)?,
-        None => flux_lsp::builtin_configs()
-            .into_iter()
-            .filter(|c| {
-                c.cmd
-                    .first()
-                    .is_some_and(|p| flux_lsp::config::executable(p))
-            })
-            .collect(),
+        None => flux_lsp::builtin_configs(),
     };
+    editor.lsp.enabled = editor
+        .lsp
+        .configs
+        .iter()
+        .filter(|c| {
+            c.cmd
+                .first()
+                .is_some_and(|p| flux_lsp::config::executable(p))
+        })
+        .cloned()
+        .collect();
     editor.open_args(&files);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -81,8 +85,22 @@ async fn run(mut editor: Editor) -> Result<()> {
     // needs a prompt is drawn over the screen as it was, without redrawing the text first.
     let mut last_grid: Option<Grid> = None;
     let mut prompt_base: Option<Grid> = None;
+    // Keys typed while a request is waited for (Neovim's `request_sync`, as 'formatexpr' makes
+    // for `gq`): they're handled once it's answered.
+    let mut held: std::collections::VecDeque<Event> = std::collections::VecDeque::new();
 
     loop {
+        if editor.lsp.waiting.is_none() && !held.is_empty() {
+            while let Some(event) = held.pop_front() {
+                handle_event(event, &mut editor, &mut engine, &mut renderer);
+                if editor.quit || editor.lsp.waiting.is_some() {
+                    break;
+                }
+            }
+            if editor.quit {
+                break;
+            }
+        }
         // Parsing gets a slice of each frame; a long one goes on between keys.
         let parsing = editor.update_syntax_within(Some(PARSE_SLICE));
         editor.fit_floats();
@@ -153,9 +171,20 @@ async fn run(mut editor: Editor) -> Result<()> {
             .semantic_tokens
             .deadline()
             .map(tokio::time::Instant::from_std);
+        let deadline = editor.lsp.waiting.map(|(_, _, at)| at);
         let batch = tokio::select! {
             biased;
             batch = events.next() => batch,
+            // The server took too long: stop waiting (its answer will be ignored).
+            () = async {
+                match deadline {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            }, if deadline.is_some() => {
+                editor.lsp.waiting = None;
+                continue;
+            }
             Some(event) = server_events.recv() => {
                 servers.handle(event, &mut editor, &mut engine);
                 // Take whatever else arrived before redrawing.
@@ -172,7 +201,12 @@ async fn run(mut editor: Editor) -> Result<()> {
             break;
         };
         for event in batch {
-            handle_event(event?, &mut editor, &mut engine, &mut renderer);
+            let event = event?;
+            if editor.lsp.waiting.is_some() {
+                held.push_back(event);
+                continue;
+            }
+            handle_event(event, &mut editor, &mut engine, &mut renderer);
             if editor.quit {
                 break;
             }

@@ -139,6 +139,8 @@ pub struct Diagnostic {
     pub message: String,
     pub source: Option<String>,
     pub code: Option<String>,
+    /// The diagnostic as the server sent it (code actions send it back).
+    pub lsp: Value,
     /// Where it was in the buffer's text when it came, as (line, byte column) points, and the
     /// text's revision then: like Neovim's extmarks, diagnostics move with edits until the
     /// server sends new ones.
@@ -195,6 +197,13 @@ pub struct LspState {
     next_group: u64,
     /// The configs that start servers for matching buffers (`:lsp enable`).
     pub enabled: Vec<ServerConfig>,
+    /// Every config known (`vim.lsp.config`), enabled or not.
+    pub configs: Vec<ServerConfig>,
+    /// A request the editor waits for (Neovim's `request_sync`): the client, the request's id,
+    /// and when to give up. Keys typed meanwhile are held until then.
+    pub waiting: Option<(ClientId, i64, std::time::Instant)>,
+    /// Clients stopping to be started again (`:lsp restart`), with the buffers they had.
+    pub restarts: Vec<(ClientId, Vec<BufferId>)>,
     pub clients: Vec<Client>,
     next_client: usize,
     pub outbox: Vec<Outgoing>,
@@ -357,6 +366,28 @@ fn client_capabilities() -> Value {
                 "hierarchicalDocumentSymbolSupport": true,
                 "symbolKind": { "valueSet": (1..=26).collect::<Vec<_>>() },
                 "tagSupport": { "valueSet": [1] }
+            },
+            "rename": { "dynamicRegistration": false, "prepareSupport": true },
+            "codeAction": {
+                "dynamicRegistration": false,
+                "codeActionLiteralSupport": { "codeActionKind": { "valueSet": [
+                    "", "quickfix", "refactor", "refactor.extract", "refactor.inline",
+                    "refactor.rewrite", "source", "source.organizeImports"
+                ] } },
+                "isPreferredSupport": true,
+                "dataSupport": true,
+                "resolveSupport": { "properties": ["edit", "command"] },
+                "disabledSupport": true
+            },
+            "rangeFormatting": { "dynamicRegistration": false },
+            "signatureHelp": {
+                "dynamicRegistration": false,
+                "signatureInformation": {
+                    "activeParameterSupport": true,
+                    "noActiveParameterSupport": true,
+                    "documentationFormat": ["markdown", "plaintext"],
+                    "parameterInformation": { "labelOffsetSupport": true }
+                }
             }
         },
         "window": {
@@ -369,7 +400,8 @@ fn client_capabilities() -> Value {
             "configuration": true,
             "workspaceFolders": true,
             "semanticTokens": { "refreshSupport": true },
-            "workspaceEdit": { "resourceOperations": ["rename", "create", "delete"] }
+            "workspaceEdit": { "resourceOperations": ["rename", "create", "delete"] },
+            "executeCommand": { "dynamicRegistration": false }
         }
     })
 }
@@ -636,6 +668,29 @@ impl Editor {
         id
     }
 
+    /// Start a new client like one that has exited (`:lsp restart`), with `buffers` open in it.
+    pub fn lsp_restart(
+        &mut self,
+        config: ServerConfig,
+        root: Option<PathBuf>,
+        buffers: &[BufferId],
+    ) {
+        let files: Vec<(BufferId, PathBuf)> = buffers
+            .iter()
+            .filter_map(|&id| {
+                let path = self.buffer(id).filter(|b| b.loaded)?.path.as_ref()?;
+                Some((id, crate::explorer::absolute(&self.cwd, path)))
+            })
+            .collect();
+        let Some((_, first)) = files.first() else {
+            return;
+        };
+        let client = self.lsp_start(config, root, &first.clone());
+        for (id, path) in files {
+            self.lsp_open(client, id, &path);
+        }
+    }
+
     /// Open buffer `id` (the file `path`) in `client`.
     fn lsp_open(&mut self, client: ClientId, id: BufferId, path: &Path) {
         let Some(buffer) = self.buffer(id) else {
@@ -866,6 +921,7 @@ impl Editor {
                     .map(|((rev, s), (_, e))| (rev, s, e));
                 Diagnostic {
                     client,
+                    lsp: d.clone(),
                     start,
                     end,
                     placed,
@@ -997,11 +1053,13 @@ impl Editor {
                 return;
             };
             let shift = crate::LineShift::of(&buffer.text, &edit);
+            let replaced = Replaced::of(&buffer.text, &edit);
+            let insert_mode = self.mode == crate::Mode::Insert;
+            let current = self.window.id;
             for w in std::iter::once(&mut self.window).chain(self.windows.iter_mut()) {
                 if w.buffer == id {
-                    if let Some(p) = shift.adjust(w.cursor) {
-                        w.cursor = p;
-                    }
+                    let adj = !(insert_mode && w.id == current);
+                    w.cursor = replaced.fix_cursor(w.cursor, adj);
                     let top = Cursor {
                         line: w.top,
                         col: 0,
@@ -1057,9 +1115,84 @@ impl Editor {
     }
 }
 
+/// Text an edit replaces, for moving cursors as `nvim_buf_set_text` does.
+struct Replaced {
+    start: Cursor,
+    end: Cursor,
+    new_rows: usize,
+    new_cols_at_end_row: usize,
+}
+
+impl Replaced {
+    fn of(text: &Text, edit: &flux_core::Edit) -> Self {
+        let (sl, sc) = text.char_to_pos(edit.at);
+        let (el, ec) = text.char_to_pos(edit.at + edit.delete);
+        let last = edit.insert.rsplit('\n').next().unwrap_or("");
+        Self {
+            start: Cursor { line: sl, col: sc },
+            end: Cursor { line: el, col: ec },
+            new_rows: edit.insert.matches('\n').count() + 1,
+            new_cols_at_end_row: last.chars().count(),
+        }
+    }
+
+    /// Neovim's `fix_cursor_cols`: a cursor after the text keeps its place relative to the
+    /// end; one inside it stays inside the new text. `adj` is 1 except for the cursor in
+    /// Insert mode.
+    fn fix_cursor(&self, mut c: Cursor, adj: bool) -> Cursor {
+        let adj = usize::from(adj);
+        let change_start = if self.new_rows == 1 {
+            self.start.col
+        } else {
+            0
+        };
+        let change_end = change_start + self.new_cols_at_end_row;
+        let new_end_row = self.start.line + self.new_rows - 1;
+        if c.line == self.end.line && c.col + adj > self.end.col {
+            let old_rows = self.end.line - self.start.line + 1;
+            c.line = c.line + self.new_rows - old_rows;
+            c.col = (c.col + change_end).saturating_sub(self.end.col);
+        } else if c.line > self.end.line {
+            c.line = c.line + self.new_rows - (self.end.line - self.start.line + 1);
+        } else if c.line >= self.start.line {
+            if c.line > new_end_row {
+                c.line = new_end_row;
+                c.col = c.col.max(usize::MAX / 2);
+            }
+            if c.line == new_end_row && c.col > change_end {
+                c.col = change_end;
+                if c.col >= change_start + adj {
+                    c.col -= adj;
+                }
+            }
+        }
+        c
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursors_move_like_nvim_buf_set_text() {
+        let text = Text::new("fn f() {\n    let total = a + b;\n    total * 2\n}\n");
+        let at = |l: usize, c: usize| Cursor { line: l, col: c };
+        // `let total = a + b;\n    total` becomes `(a + b)`.
+        let start = text.pos_to_char(1, 4);
+        let end = text.pos_to_char(2, 9);
+        let edit = flux_core::Edit::replace(start..end, "(a + b)".to_string());
+        let r = Replaced::of(&text, &edit);
+        // Inside the replaced text: kept inside the new text.
+        assert_eq!(r.fix_cursor(at(1, 12), true), at(1, 10));
+        assert_eq!(r.fix_cursor(at(1, 6), true), at(1, 6));
+        // After it on its last line: the same place relative to its end.
+        assert_eq!(r.fix_cursor(at(2, 12), true), at(1, 14));
+        // Below it: up a line.
+        assert_eq!(r.fix_cursor(at(3, 0), true), at(2, 0));
+        // Above it: as it was.
+        assert_eq!(r.fix_cursor(at(0, 3), true), at(0, 3));
+    }
 
     #[test]
     fn uris() {

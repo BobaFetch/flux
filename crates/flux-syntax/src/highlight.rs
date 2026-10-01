@@ -83,8 +83,9 @@ impl std::fmt::Debug for Syntax {
     }
 }
 
-/// Feed `text` to the parser in rope chunks. Like Neovim, the last line ends with a line
-/// break too (a Markdown code fence on the last line closes its block).
+/// Feed `text` to the parser in rope chunks. Like Neovim, which gives the parser each line with
+/// its end of line, the last line ends with one too (a Markdown code block's closing fence is
+/// only one when a line break follows it).
 fn parse(parser: &mut Parser, text: &Text, old: Option<&Tree>, deadline: Instant) -> Option<Tree> {
     let rope = text.rope();
     let len = rope.len_bytes();
@@ -558,9 +559,9 @@ mod tests {
 
     #[test]
     fn rust_highlights() {
-        let mut text = Text::new("fn main() {\n    let x = \"hi\"; // note\n}\n");
+        let text = Text::new("fn main() {\n    let x = \"hi\"; // note\n}\n");
         let mut syntax = Syntax::new("rust").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "fn", "keyword.function"), "{s:?}");
         assert!(has(&s, "main", "function"), "{s:?}");
@@ -572,17 +573,17 @@ mod tests {
     fn incremental_update_follows_edits() {
         let mut text = Text::new("fn main() {}\n");
         let mut syntax = Syntax::new("rust").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         // `fn` becomes `let x = 1; fn`, on its own line.
         text.apply(&Edit::insert(0, "let x = 1;\n"));
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "let", "keyword"), "{s:?}");
         assert!(has(&s, "fn", "keyword.function"), "{s:?}");
         assert_eq!(syntax.tree.as_ref().unwrap().root_node().to_sexp(), {
             let mut fresh = Syntax::new("rust").unwrap();
-            let mut t = text.clone();
-            fresh.update(&mut t, FULL);
+            let t = text.clone();
+            fresh.update(&t, FULL);
             fresh.tree.unwrap().root_node().to_sexp()
         });
     }
@@ -595,20 +596,20 @@ mod tests {
         let mut text = Text::new(&src);
         let mut syntax = Syntax::new("rust").unwrap();
         let mut rounds = 0;
-        while !syntax.update(&mut text, Some(Duration::from_micros(200))) {
+        while !syntax.update(&text, Some(Duration::from_micros(200))) {
             rounds += 1;
             assert!(rounds < 100_000);
         }
         assert!(rounds > 0, "the budget should have run out at least once");
         let mut fresh = Syntax::new("rust").unwrap();
-        fresh.update(&mut text.clone(), FULL);
+        fresh.update(&text.clone(), FULL);
         assert_eq!(
             syntax.tree.as_ref().unwrap().root_node().to_sexp(),
             fresh.tree.unwrap().root_node().to_sexp()
         );
         // Edits during a resumed parse restart it on the new text.
         text.apply(&Edit::insert(0, "struct S;\n"));
-        while !syntax.update(&mut text, Some(Duration::from_micros(200))) {}
+        while !syntax.update(&text, Some(Duration::from_micros(200))) {}
         assert!(
             syntax
                 .tree
@@ -622,17 +623,17 @@ mod tests {
 
     #[test]
     fn injections_highlight_embedded_code() {
-        let mut text = Text::new("# Title\n\nSome *em* text.\n\n```rust\nlet x = 1;\n```\n");
+        let text = Text::new("# Title\n\nSome *em* text.\n\n```rust\nlet x = 1;\n```\n");
         let mut syntax = Syntax::new("markdown").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "# Title", "markup.heading.1"), "{s:?}");
         assert!(has(&s, "*em*", "markup.italic"), "{s:?}");
         assert!(has(&s, "let", "keyword"), "{s:?}");
         // Rust macros' arguments are Rust.
-        let mut text = Text::new("fn f() { println!(\"{}\", x.len()); }\n");
+        let text = Text::new("fn f() { println!(\"{}\", x.len()); }\n");
         let mut syntax = Syntax::new("rust").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "len", "function.call"), "{s:?}");
     }

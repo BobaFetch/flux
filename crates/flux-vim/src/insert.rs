@@ -138,6 +138,8 @@ impl Engine {
             | KeyCode::Home
             | KeyCode::End => self.arrow(editor, key.code),
             _ if ctrl('f') => self.ctrl_f(editor),
+            // Neovim maps it to `vim.lsp.buf.signature_help()`.
+            _ if ctrl('s') => crate::lsp::signature::request(editor),
             KeyCode::Char(c) if key.mods == Modifiers::NONE => self.insert_char(editor, c),
             _ => {}
         }
