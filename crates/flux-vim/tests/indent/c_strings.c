@@ -1,0 +1,14 @@
+const char *msg = "a { brace";
+const char *other = "a ( paren";
+char c = '{';
+char d = '(';
+
+int strings(void)
+{
+    const char *s = "text with } brace";
+    char q = '}';
+    if (s[0] == '{')
+        return 1;
+    puts("(unbalanced");
+    return 0;
+}

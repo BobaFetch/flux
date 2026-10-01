@@ -1,0 +1,28 @@
+void handle(int code)
+{
+    switch (code) {
+    case 0:
+        start();
+        break;
+    case 1: run();
+            break;
+    case 2:
+    case 3:
+        {
+            int x = code * 2;
+            report(x);
+        }
+        break;
+    default:
+        stop();
+    }
+
+again:
+    code++;
+    if (code < 5)
+        goto again;
+    {
+        int nested = 1;
+        use(nested);
+    }
+}

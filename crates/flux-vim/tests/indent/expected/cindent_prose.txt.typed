@@ -1,0 +1,11 @@
+Dear reader,
+this letter is indented.
+It ends with a comma,
+and continues (in parens,
+maybe) for a while.
+Then: a colon line
+and a label: here
+default: something
+case 1: other
+{ braces }
+last line;
