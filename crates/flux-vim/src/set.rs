@@ -230,7 +230,42 @@ fn set_string(
             _ => String::new(),
         },
         _ => {
-            if let Some(v) = op.strip_prefix("+=") {
+            // Comma-separated lists add and remove items, not text.
+            let list = matches!(
+                def.name,
+                "completeopt"
+                    | "cinkeys"
+                    | "cinoptions"
+                    | "cinwords"
+                    | "comments"
+                    | "indentkeys"
+                    | "matchpairs"
+            );
+            let items = |s: &str| -> Vec<String> {
+                s.split(',')
+                    .filter(|i| !i.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            };
+            if list && let Some(v) = op.strip_prefix("+=") {
+                let mut all = items(&current);
+                if !all.iter().any(|i| i == v) && !v.is_empty() {
+                    all.push(v.to_string());
+                }
+                all.join(",")
+            } else if list && let Some(v) = op.strip_prefix("^=") {
+                let mut all = items(&current);
+                if !all.iter().any(|i| i == v) && !v.is_empty() {
+                    all.insert(0, v.to_string());
+                }
+                all.join(",")
+            } else if list && let Some(v) = op.strip_prefix("-=") {
+                let mut all = items(&current);
+                if let Some(i) = all.iter().position(|i| i == v) {
+                    all.remove(i);
+                }
+                all.join(",")
+            } else if let Some(v) = op.strip_prefix("+=") {
                 format!("{current}{v}")
             } else if let Some(v) = op.strip_prefix("^=") {
                 format!("{v}{current}")
@@ -245,6 +280,23 @@ fn set_string(
     };
     let valid = match def.name {
         "background" => matches!(value.as_str(), "dark" | "light"),
+        "signcolumn" => matches!(value.as_str(), "auto" | "yes" | "no"),
+        "completeopt" => value.split(',').filter(|v| !v.is_empty()).all(|v| {
+            matches!(
+                v,
+                "menu"
+                    | "menuone"
+                    | "longest"
+                    | "preview"
+                    | "popup"
+                    | "noinsert"
+                    | "noselect"
+                    | "fuzzy"
+                    | "nosort"
+                    | "preinsert"
+                    | "nearest"
+            )
+        }),
         "filetype" => value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')),

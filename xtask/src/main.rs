@@ -19,7 +19,8 @@ fn main() -> Result<()> {
         ["oracle", "check"] => oracle_check(),
         ["colors", "gen"] => colors_gen(),
         ["colors", "check"] => colors_check(),
-        ["screens"] => screens::screens(),
+        ["screens"] => screens::screens(None),
+        ["screens", filter] => screens::screens(Some(filter)),
         ["indent", "gen"] => indent::gen_expected(),
         ["indent", "check"] => indent::check(),
         _ => bail!(

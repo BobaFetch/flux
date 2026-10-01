@@ -23,6 +23,8 @@ pub struct Engine {
     /// The change being recorded while its Insert mode runs.
     pub(crate) recording: Option<Dot>,
     pub(crate) insert: Option<Insert>,
+    /// Insert-mode completion (see [`crate::completion`]).
+    pub(crate) compl: crate::completion::Completion,
     /// A Normal-mode command typed with `CTRL-O` from Insert mode.
     pub(crate) ctrl_o: Option<CtrlO>,
     /// Edits of the undo step being built.
@@ -64,6 +66,8 @@ pub struct Engine {
     pub(crate) global_subs: (usize, usize),
     /// The command line being run, as typed (output that starts below it shows it too).
     pub(crate) typed_cmdline: Option<String>,
+    /// A question waiting for its answer (`input()`, `inputlist()`).
+    pub(crate) prompt: Option<crate::prompt::Prompt>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +132,12 @@ impl Engine {
     /// A key, typed or replayed (macros, `.`).
     pub(crate) fn process_key(&mut self, editor: &mut Editor, key: Key) {
         editor.keep_msg = false;
+        if self.prompt.is_some() && self.prompt_key(editor, key) {
+            editor.check_floats();
+            editor.refresh_window_widths();
+            editor.with_window(|win, m| win.scroll_to_cursor(m));
+            return;
+        }
         if self.confirm_sub.is_some() {
             self.confirm_key(editor, key);
             editor.with_window(|win, m| win.scroll_to_cursor(m));
@@ -285,9 +295,13 @@ impl Engine {
         {
             editor.message = Some(m);
         }
+        // Floats close when the cursor moves or another buffer is shown.
+        editor.check_floats();
         // The number column may have grown or shrunk.
         editor.refresh_window_widths();
         editor.with_window(|win, m| win.scroll_to_cursor(m));
+        editor.pum_ruler_check();
+        self.snippet_check(editor);
     }
 
     fn normal_key(&mut self, editor: &mut Editor, key: Key) {
@@ -295,6 +309,17 @@ impl Engine {
             && editor.current_buffer().directory
             && self.explorer_key(editor, key)
         {
+            return;
+        }
+        // `<CR>` in a quickfix window goes to the entry under the cursor.
+        if self.pending.is_empty()
+            && editor.current_buffer().quickfix.is_some()
+            && key == Key::plain(KeyCode::Enter)
+        {
+            if let Err(e) = editor.qf_enter() {
+                editor.error(e);
+                self.failed = true;
+            }
             return;
         }
         self.pending.push(key);
@@ -453,13 +478,14 @@ impl Engine {
     pub(crate) fn edit(&mut self, editor: &mut Editor, edit: Edit) {
         // Commands that would change a listing are refused before they get here; this catches
         // the rest (Ex commands, Insert mode entered some other way).
-        if editor.current_buffer().directory {
+        if editor.current_buffer().nomodifiable() {
             editor.error(flux_view::explorer::NOT_MODIFIABLE);
             self.failed = true;
             return;
         }
         let cursor = editor.cursor();
         let first = self.change.is_none();
+        self.snippet_edit(editor, &edit);
         let shift = LineShift::of(editor.text(), &edit);
         editor.current_buffer_mut().marks.adjust(&shift);
         // Lines `:g` has yet to visit move along (and are forgotten when deleted).
@@ -496,6 +522,18 @@ impl Engine {
         marks.set('.', start);
         builder.edits.push(edit);
         builder.inverse.push(inverse);
+    }
+
+    /// An undo step is being built.
+    pub(crate) fn has_change(&self) -> bool {
+        self.change.is_some()
+    }
+
+    /// Have undo put the cursor back at `p` for the step being built (where `gq` was typed).
+    pub(crate) fn set_undo_cursor(&mut self, p: Pos) {
+        if let Some(b) = self.change.as_mut() {
+            b.cursor_before = (p.line, p.col);
+        }
     }
 
     /// Finish the undo step being built, if any.
@@ -667,7 +705,7 @@ impl Engine {
         }
     }
 
-    fn cmdline_edit(&mut self, editor: &mut Editor, key: Key) {
+    pub(crate) fn cmdline_edit(&mut self, editor: &mut Editor, key: Key) {
         if std::mem::take(&mut self.cmdline_register) {
             if let Some(name) = key.typed_char()
                 && let Some(reg) = editor.register(Some(name))

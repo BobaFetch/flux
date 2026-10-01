@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::ops::{ControlFlow, Range};
 use std::time::{Duration, Instant};
 
-use flux_core::{Edits, Text};
+use flux_core::{Revision, Text};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{
     InputEdit, Node, ParseOptions, ParseState, Parser, Point, QueryCursor, Range as TsRange, Tree,
@@ -32,6 +32,11 @@ pub struct Span {
     pub end: usize,
     pub capture: &'static str,
     pub url: Option<std::sync::Arc<str>>,
+    /// Neovim's `conceal` metadata: with 'conceallevel', the text shows as this instead
+    /// (nothing when it's empty).
+    pub conceal: Option<std::sync::Arc<str>>,
+    /// Neovim's `conceal_lines`: the whole line is hidden.
+    pub conceal_lines: bool,
 }
 
 /// A capture in bytes, before sorting into paint order.
@@ -40,6 +45,8 @@ struct ByteSpan {
     capture: &'static str,
     priority: u32,
     url: Option<std::sync::Arc<str>>,
+    conceal: Option<std::sync::Arc<str>>,
+    conceal_lines: bool,
 }
 
 /// A parse tree for one buffer.
@@ -47,8 +54,8 @@ pub struct Syntax {
     lang: &'static Lang,
     parser: Parser,
     tree: Option<Tree>,
-    /// The [`Text::id`] the tree follows.
-    text_id: u64,
+    /// The revision of the text the tree follows.
+    seen: Revision,
     /// Edits were applied to the tree's positions but it hasn't been parsed since.
     stale: bool,
     /// A parse ran out of time; the parser keeps its state to resume it.
@@ -76,12 +83,17 @@ impl std::fmt::Debug for Syntax {
     }
 }
 
-/// Feed `text` to the parser in rope chunks.
+/// Feed `text` to the parser in rope chunks. Like Neovim, which gives the parser each line with
+/// its end of line, the last line ends with one too (a Markdown code block's closing fence is
+/// only one when a line break follows it).
 fn parse(parser: &mut Parser, text: &Text, old: Option<&Tree>, deadline: Instant) -> Option<Tree> {
     let rope = text.rope();
     let len = rope.len_bytes();
     let mut input = |byte: usize, _: Point| -> &[u8] {
-        if byte >= len {
+        if byte == len {
+            return b"\n";
+        }
+        if byte > len {
             return &[];
         }
         let (chunk, start, _, _) = rope.chunk_at_byte(byte);
@@ -115,11 +127,16 @@ impl Syntax {
             lang,
             parser,
             tree: None,
-            text_id: 0,
+            seen: Revision::default(),
             stale: true,
             resuming: false,
             injections: RefCell::default(),
         })
+    }
+
+    /// The tree is up to date with the text last given to [`Syntax::update`].
+    pub fn is_parsed(&self) -> bool {
+        !self.stale && self.tree.is_some()
     }
 
     /// The parser name.
@@ -130,14 +147,13 @@ impl Syntax {
     /// Follow `text`'s edits since the last call: the tree's positions move with them, without
     /// reparsing (enough to keep highlights and string/comment lookups in place after small
     /// edits, such as reindenting).
-    fn follow(&mut self, text: &mut Text) {
-        let edits = text.take_edits();
-        if text.id() == self.text_id && matches!(&edits, Edits::Known(e) if e.is_empty()) {
+    fn follow(&mut self, text: &Text) {
+        if text.revision() == self.seen {
             return;
         }
-        match (self.tree.as_mut(), edits) {
-            (Some(tree), Edits::Known(edits)) if text.id() == self.text_id => {
-                for e in edits {
+        match (self.tree.as_mut(), text.edits_since(self.seen)) {
+            (Some(tree), Some(edits)) => {
+                for e in edits.map(|e| e.bytes) {
                     tree.edit(&InputEdit {
                         start_byte: e.start_byte,
                         old_end_byte: e.old_end_byte,
@@ -148,13 +164,11 @@ impl Syntax {
                     });
                 }
             }
-            (None, Edits::Known(_)) if text.id() == self.text_id => {}
+            (None, Some(_)) => {}
             // Another text, or edits that weren't kept: start over.
-            _ => {
-                self.tree = None;
-                self.text_id = text.id();
-            }
+            (_, None) => self.tree = None,
         }
+        self.seen = text.revision();
         self.stale = true;
         if self.resuming {
             // The parse that ran out of time was of older text.
@@ -168,7 +182,7 @@ impl Syntax {
     /// parsing for at most `budget` (with `None`, only [`Syntax::follow`] the edits). Returns
     /// whether the tree is up to date; if not, the next call goes on from where this one
     /// stopped, and the tree as it was (moved by the edits) is used meanwhile.
-    pub fn update(&mut self, text: &mut Text, budget: Option<Duration>) -> bool {
+    pub fn update(&mut self, text: &Text, budget: Option<Duration>) -> bool {
         self.follow(text);
         if !self.stale {
             return true;
@@ -207,7 +221,7 @@ impl Syntax {
         let Some(tree) = &self.tree else {
             return Vec::new();
         };
-        if text.id() != self.text_id {
+        if text.revision() != self.seen {
             return Vec::new();
         }
         let p = Point {
@@ -235,7 +249,7 @@ impl Syntax {
         let Some(tree) = &self.tree else {
             return Vec::new();
         };
-        if text.id() != self.text_id || lines.start >= text.line_count() {
+        if text.revision() != self.seen || lines.start >= text.line_count() {
             return Vec::new();
         }
         let rope = text.rope();
@@ -252,20 +266,14 @@ impl Syntax {
             if from >= to {
                 continue;
             }
-            split_lines(text, from..to, s.capture, s.url, &mut out);
+            split_lines(text, from..to, &s, &mut out);
         }
         out
     }
 }
 
 /// Split a byte range into per-line char spans.
-fn split_lines(
-    text: &Text,
-    range: Range<usize>,
-    capture: &'static str,
-    url: Option<std::sync::Arc<str>>,
-    out: &mut Vec<Span>,
-) {
+fn split_lines(text: &Text, range: Range<usize>, s: &ByteSpan, out: &mut Vec<Span>) {
     let rope = text.rope();
     let first = rope.byte_to_line(range.start);
     let last = rope.byte_to_line(range.end);
@@ -285,13 +293,15 @@ fn split_lines(
             line_len
         };
         let to = to.min(line_len);
-        if from < to {
+        if from < to || s.conceal_lines {
             out.push(Span {
                 line,
                 start: from,
-                end: to,
-                capture,
-                url: url.clone(),
+                end: to.max(from),
+                capture: s.capture,
+                url: s.url.clone(),
+                conceal: s.conceal.clone(),
+                conceal_lines: s.conceal_lines,
             });
         }
     }
@@ -366,8 +376,12 @@ fn layer(
                 None => s.value.clone(),
             })
             .map(std::sync::Arc::from);
+        let conceal = pattern
+            .setting(Some(cap.index), "conceal")
+            .map(|s| std::sync::Arc::from(s.value.as_deref().unwrap_or("")));
+        let conceal_lines = pattern.setting(Some(cap.index), "conceal_lines").is_some();
         let hidden = name.starts_with('_') || matches!(name, "spell" | "nospell" | "conceal");
-        if hidden && url.is_none() {
+        if hidden && url.is_none() && conceal.is_none() && !conceal_lines {
             continue;
         }
         let priority = pattern
@@ -379,6 +393,8 @@ fn layer(
             capture: if hidden { "" } else { name },
             priority,
             url,
+            conceal,
+            conceal_lines,
         });
     }
     if depth >= MAX_INJECTION_DEPTH {
@@ -543,9 +559,9 @@ mod tests {
 
     #[test]
     fn rust_highlights() {
-        let mut text = Text::new("fn main() {\n    let x = \"hi\"; // note\n}\n");
+        let text = Text::new("fn main() {\n    let x = \"hi\"; // note\n}\n");
         let mut syntax = Syntax::new("rust").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "fn", "keyword.function"), "{s:?}");
         assert!(has(&s, "main", "function"), "{s:?}");
@@ -557,17 +573,17 @@ mod tests {
     fn incremental_update_follows_edits() {
         let mut text = Text::new("fn main() {}\n");
         let mut syntax = Syntax::new("rust").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         // `fn` becomes `let x = 1; fn`, on its own line.
         text.apply(&Edit::insert(0, "let x = 1;\n"));
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "let", "keyword"), "{s:?}");
         assert!(has(&s, "fn", "keyword.function"), "{s:?}");
         assert_eq!(syntax.tree.as_ref().unwrap().root_node().to_sexp(), {
             let mut fresh = Syntax::new("rust").unwrap();
-            let mut t = text.clone();
-            fresh.update(&mut t, FULL);
+            let t = text.clone();
+            fresh.update(&t, FULL);
             fresh.tree.unwrap().root_node().to_sexp()
         });
     }
@@ -580,20 +596,20 @@ mod tests {
         let mut text = Text::new(&src);
         let mut syntax = Syntax::new("rust").unwrap();
         let mut rounds = 0;
-        while !syntax.update(&mut text, Some(Duration::from_micros(200))) {
+        while !syntax.update(&text, Some(Duration::from_micros(200))) {
             rounds += 1;
             assert!(rounds < 100_000);
         }
         assert!(rounds > 0, "the budget should have run out at least once");
         let mut fresh = Syntax::new("rust").unwrap();
-        fresh.update(&mut text.clone(), FULL);
+        fresh.update(&text.clone(), FULL);
         assert_eq!(
             syntax.tree.as_ref().unwrap().root_node().to_sexp(),
             fresh.tree.unwrap().root_node().to_sexp()
         );
         // Edits during a resumed parse restart it on the new text.
         text.apply(&Edit::insert(0, "struct S;\n"));
-        while !syntax.update(&mut text, Some(Duration::from_micros(200))) {}
+        while !syntax.update(&text, Some(Duration::from_micros(200))) {}
         assert!(
             syntax
                 .tree
@@ -607,17 +623,17 @@ mod tests {
 
     #[test]
     fn injections_highlight_embedded_code() {
-        let mut text = Text::new("# Title\n\nSome *em* text.\n\n```rust\nlet x = 1;\n```\n");
+        let text = Text::new("# Title\n\nSome *em* text.\n\n```rust\nlet x = 1;\n```\n");
         let mut syntax = Syntax::new("markdown").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "# Title", "markup.heading.1"), "{s:?}");
         assert!(has(&s, "*em*", "markup.italic"), "{s:?}");
         assert!(has(&s, "let", "keyword"), "{s:?}");
         // Rust macros' arguments are Rust.
-        let mut text = Text::new("fn f() { println!(\"{}\", x.len()); }\n");
+        let text = Text::new("fn f() { println!(\"{}\", x.len()); }\n");
         let mut syntax = Syntax::new("rust").unwrap();
-        syntax.update(&mut text, FULL);
+        syntax.update(&text, FULL);
         let s = spans(&syntax, &text);
         assert!(has(&s, "len", "function.call"), "{s:?}");
     }

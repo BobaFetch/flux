@@ -20,6 +20,8 @@ pub enum HlColor {
 pub struct HlAttr {
     pub fg: Option<HlColor>,
     pub bg: Option<HlColor>,
+    /// The underline color (24-bit; Neovim sends it with or without 'termguicolors').
+    pub sp: Option<HlColor>,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -67,14 +69,17 @@ fn parse_groups(v: &Value) -> Groups {
                 .and_then(Value::as_u64)
                 .map(|n| HlColor::Index(n as u8))
         };
+        let sp = d.get("sp").and_then(rgb);
         let gui = HlAttr {
             fg: d.get("fg").and_then(rgb),
             bg: d.get("bg").and_then(rgb),
+            sp,
             ..HlAttr::default()
         };
         let cterm = HlAttr {
             fg: index("ctermfg"),
             bg: index("ctermbg"),
+            sp,
             ..HlAttr::default()
         };
         groups.insert(

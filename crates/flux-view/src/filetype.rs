@@ -153,6 +153,8 @@ impl Editor {
         if buffer.syntax.as_ref().map(|s| s.lang()) != lang {
             buffer.syntax = lang.and_then(flux_syntax::Syntax::new);
         }
+        // Language servers enabled for the filetype attach (`vim.lsp.enable`).
+        self.lsp_attach(id);
     }
 
     /// Bring the syntax trees of the buffers on screen up to date with their text.
@@ -169,11 +171,13 @@ impl Editor {
         }
         let shown: Vec<BufferId> = std::iter::once(self.window.buffer)
             .chain(self.windows.iter().map(|w| w.buffer))
+            .chain(self.floats.iter().map(|f| f.buffer))
+            .chain(self.pum_info_buffer())
             .collect();
         let mut pending = false;
         for buffer in self.buffers.iter_mut().filter(|b| shown.contains(&b.id)) {
             if let Some(syntax) = buffer.syntax.as_mut() {
-                pending |= !syntax.update(&mut buffer.text, budget);
+                pending |= !syntax.update(&buffer.text, budget);
             }
         }
         pending

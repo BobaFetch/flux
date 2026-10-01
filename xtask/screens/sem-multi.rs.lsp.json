@@ -1,0 +1,65 @@
+{
+ "capabilities": {
+  "textDocumentSync": {
+   "openClose": true,
+   "change": 2
+  },
+  "positionEncoding": "utf-16",
+  "semanticTokensProvider": {
+   "legend": {
+    "tokenTypes": [
+     "struct",
+     "property",
+     "type",
+     "function",
+     "parameter",
+     "variable",
+     "string",
+     "macro",
+     "enumMember"
+    ],
+    "tokenModifiers": [
+     "declaration",
+     "defaultLibrary",
+     "readonly",
+     "deprecated",
+     "static"
+    ]
+   },
+   "full": true
+  }
+ },
+ "on": {
+  "textDocument/semanticTokens/full": {
+   "result": {
+    "data": [
+     1,
+     12,
+     16,
+     6,
+     0,
+     2,
+     8,
+     4,
+     5,
+     1,
+     0,
+     14,
+     5,
+     5,
+     5,
+     1,
+     4,
+     7,
+     3,
+     8,
+     0,
+     0,
+     8,
+     7,
+     0
+    ]
+   }
+  }
+ }
+}

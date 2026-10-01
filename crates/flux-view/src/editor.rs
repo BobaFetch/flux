@@ -8,6 +8,15 @@ use crate::{
     Buffer, BufferId, Cursor, Dir, Jump, Layout, Metrics, Rect, Registers, Window, WindowId,
 };
 
+/// Width of the sign column ('signcolumn') in a window showing a buffer that has signs or not.
+pub fn sign_width(signcolumn: &str, has_signs: bool) -> usize {
+    match signcolumn {
+        "yes" => 2,
+        "auto" if has_signs => 2,
+        _ => 0,
+    }
+}
+
 /// The command line: the one row below the windows.
 /// Rows below the windows for the command line and messages.
 pub const CMDLINE_ROWS: usize = 1;
@@ -55,6 +64,8 @@ pub enum MessageKind {
     Error,
     /// A question waiting for an answer (`(y/n)?`), with the cursor after it.
     Question,
+    /// Shown in full in the warning color (WarningMsg).
+    Warning,
 }
 
 impl Message {
@@ -92,8 +103,11 @@ pub struct Editor {
     pub mode: Mode,
     /// Text typed on the command line, after its `cmdline_kind` character.
     pub cmdline: String,
-    /// `:` for an Ex command, `/` or `?` for a search.
+    /// `:` for an Ex command, `/` or `?` for a search, `@` for `input()` (after
+    /// `cmdline_prompt`).
     pub cmdline_kind: char,
+    /// The prompt `input()` shows before what's typed.
+    pub cmdline_prompt: String,
     /// The cursor on the command line, as a char index into `cmdline`.
     pub cmdline_pos: usize,
     /// The mode the command line returns to (Visual for a search typed in Visual mode).
@@ -113,9 +127,23 @@ pub struct Editor {
     pub filetype: crate::filetype::FiletypeSettings,
     /// The brackets MatchParen highlights in the current window (see [`crate::matchparen`]).
     pub matchparen: Option<[Cursor; 2]>,
+    /// Language servers (see [`crate::lsp`]).
+    pub lsp: crate::lsp::LspState,
+    /// Floating windows (hover, diagnostics), drawn over the others.
+    pub floats: Vec<crate::float::Float>,
+    /// Quickfix and location lists, and the tag stacks (see [`crate::quickfix`]).
+    pub quickfix: crate::quickfix::QuickfixState,
+    /// Insert-mode completion's menu and mode message (see [`crate::pum`]).
+    pub completion: crate::pum::CompletionView,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
+    /// The line below such a message when it asks for a number (`inputlist()`), with what's
+    /// typed so far, instead of the hit-enter prompt.
+    pub number_prompt: Option<String>,
+    /// Lines still on screen above the message (the list a number was typed for), shown
+    /// before it at the hit-enter prompt.
+    pub message_above: Option<String>,
     /// Paging through a long message (`-- More --`): the first row shown.
     pub more_top: Option<usize>,
     /// A key the pager doesn't know was typed: show its keys.
@@ -129,6 +157,9 @@ pub struct Editor {
     /// message line was produced. Quitting the pager early stops there, as Vim does (it pages
     /// while the command runs).
     pub message_positions: Vec<Option<Cursor>>,
+    /// Highlights in the message's lines (`:tags` shows its header in Title): line, char
+    /// range and group.
+    pub message_highlights: Vec<(usize, usize, usize, &'static str)>,
     /// The furthest message row the pager has reached (the command has run up to it).
     pub more_max_row: usize,
     /// The window's top line before the command that made the message.
@@ -193,6 +224,7 @@ impl Editor {
             mode: Mode::Normal,
             cmdline: String::new(),
             cmdline_kind: ':',
+            cmdline_prompt: String::new(),
             cmdline_pos: 0,
             cmdline_return: Mode::Normal,
             incsearch: None,
@@ -203,13 +235,20 @@ impl Editor {
             syntax_on: true,
             filetype: Default::default(),
             matchparen: None,
+            lsp: Default::default(),
+            floats: Vec::new(),
+            quickfix: Default::default(),
+            completion: Default::default(),
             registers: Registers::default(),
             hit_enter: false,
+            number_prompt: None,
+            message_above: None,
             more_top: None,
             more_help: false,
             keep_msg: false,
             kept_message: None,
             message_positions: Vec::new(),
+            message_highlights: Vec::new(),
             more_max_row: 0,
             more_restore_top: None,
             fresh_message_base: None,
@@ -284,6 +323,11 @@ impl Editor {
         buffer.created_in(self.window.id);
         self.buffers.push(buffer);
         id
+    }
+
+    /// Add `buffer` without showing it.
+    pub(crate) fn add_buffer_hidden(&mut self, buffer: Buffer) -> BufferId {
+        self.add_buffer(buffer)
     }
 
     /// A new empty buffer (`:enew`, `:new`).
@@ -434,10 +478,12 @@ impl Editor {
             w.scroll_to_cursor(m);
         });
         if let Some(old) = self.unload_on_switch.take()
-            && let Some(b) = self.buffer_mut(old)
-            && b.path.is_some()
+            && self.buffer(old).is_some_and(|b| b.path.is_some())
         {
-            b.unload();
+            self.lsp_detach(old);
+            if let Some(b) = self.buffer_mut(old) {
+                b.unload();
+            }
         }
     }
 
@@ -505,6 +551,7 @@ impl Editor {
                 w.jumps.remove_buffer(id);
             }
         }
+        self.lsp_detach(id);
         if wipe {
             self.buffers.retain(|b| b.id != id);
             self.global_marks.retain(|_, (b, _)| *b != id);
@@ -610,13 +657,29 @@ impl Editor {
     /// `:split` / `:vsplit`: a new window above (or left of) the current one, showing the same
     /// buffer at the same place, becomes current. `size` is a count for its height or width.
     pub fn split(&mut self, vertical: bool, size: Option<usize>) -> bool {
-        let id = WindowId(self.next_window);
         let after = if vertical {
             self.options.splitright
         } else {
             self.options.splitbelow
         };
-        if !self.layout.split(self.window.id, id, vertical, size, after) {
+        self.split_placed(vertical, size, Some(after))
+    }
+
+    /// Like [`Editor::split`], with the new window below / right of the current one when
+    /// `after` is `Some(true)`, above / left of it with `Some(false)`, and with `None` at the
+    /// bottom of the screen, full width (`:botright`).
+    pub fn split_placed(
+        &mut self,
+        vertical: bool,
+        size: Option<usize>,
+        after: Option<bool>,
+    ) -> bool {
+        let id = WindowId(self.next_window);
+        let fits = match after {
+            Some(after) => self.layout.split(self.window.id, id, vertical, size, after),
+            None => self.layout.split_bottom(id, size),
+        };
+        if !fits {
             self.error("E36: Not enough room");
             return false;
         }
@@ -625,6 +688,7 @@ impl Editor {
         new.id = id;
         let old = std::mem::replace(&mut self.window, new);
         self.prev_window = Some(old.id);
+        self.quickfix.window_split(old.id, id);
         self.windows.push(old);
         // A count stands in for 'winheight' or 'winwidth' while entering the new window.
         let (min_height, min_width) = match size {
@@ -702,8 +766,9 @@ impl Editor {
             let text = &buffer.text;
             let tabstop = buffer.opts.tabstop;
             let height = rect.height.max(1);
-            // The number column takes its share of the width.
-            let numw = win.opts.number_width(text.line_count(), height);
+            // The sign and number columns take their share of the width.
+            let numw = win.opts.number_width(text.line_count(), height)
+                + sign_width(&win.opts.signcolumn, self.lsp.has_signs(buffer, &self.cwd));
             let width = rect.width.saturating_sub(numw).max(1);
             let old_width = win.width.max(1);
             win.set_height(&Metrics {
@@ -731,7 +796,8 @@ impl Editor {
             };
             let numw = win
                 .opts
-                .number_width(buffer.text.line_count(), rect.height.max(1));
+                .number_width(buffer.text.line_count(), rect.height.max(1))
+                + sign_width(&win.opts.signcolumn, self.lsp.has_signs(buffer, &self.cwd));
             win.width != rect.width.saturating_sub(numw).max(1)
         });
         if stale {
@@ -886,13 +952,18 @@ impl Editor {
     }
 
     fn show(&mut self, text: String, kind: MessageKind) {
-        let wraps = matches!(kind, MessageKind::Full | MessageKind::Error)
-            && unicode_width::UnicodeWidthStr::width(text.as_str()) >= self.screen_width.max(1);
+        let wraps = matches!(
+            kind,
+            MessageKind::Full | MessageKind::Error | MessageKind::Warning
+        ) && unicode_width::UnicodeWidthStr::width(text.as_str())
+            >= self.screen_width.max(1);
         // Anything longer than one line waits for a key.
         self.hit_enter = text.contains('\n') || wraps;
         self.message = Some(Message { text, kind });
+        self.message_above = None;
         self.kept_message = None;
         self.message_positions.clear();
+        self.message_highlights.clear();
         self.more_max_row = 0;
         self.more_restore_top = None;
         self.fresh_message_base = None;
@@ -929,6 +1000,11 @@ impl Editor {
     pub fn error(&mut self, text: impl Into<String>) {
         self.error_count += 1;
         self.show(text.into(), MessageKind::Error);
+    }
+
+    /// A warning: like an error, in the warning color, without counting as an error.
+    pub fn warning(&mut self, text: impl Into<String>) {
+        self.show(text.into(), MessageKind::Warning);
     }
 
     /// Register contents, including the read-only `"%` (the file name).

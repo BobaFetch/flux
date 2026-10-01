@@ -104,6 +104,57 @@ pub fn layout_line(line: &str, tabstop: usize, wrap_width: Option<usize>) -> Lin
     LineLayout { rows: builder.rows }
 }
 
+/// Like [`layout_line`] wrapping at `width`, with Vim's 'linebreak': a row that would be cut in
+/// the middle of a word breaks after the last 'breakat' character (` ^I!@*-+;:,./?`) instead.
+pub fn layout_line_linebreak(line: &str, tabstop: usize, width: usize) -> LineLayout {
+    let flat = layout_line(line, tabstop, None);
+    let glyphs = flat.rows.into_iter().next().unwrap_or_default();
+    let chars: Vec<char> = line.chars().collect();
+    let breaks_after = |g: &Glyph| {
+        g.kind != GlyphKind::Filler
+            && chars
+                .get(g.char_idx)
+                .is_some_and(|c| " \t!@*-+;:,./?".contains(*c))
+    };
+    let width = width.max(1);
+    let mut rows: Vec<Vec<Glyph>> = vec![Vec::new()];
+    let mut x = 0;
+    for g in glyphs {
+        let w = usize::from(g.width);
+        if x + w > width && !rows.last().expect("a row").is_empty() {
+            let row = rows.last_mut().expect("a row");
+            // Break after the last break character, unless that leaves the row empty.
+            let cut = row
+                .iter()
+                .rposition(&breaks_after)
+                .map(|i| i + 1)
+                .filter(|&i| i < row.len());
+            let moved = match cut {
+                Some(i) => row.split_off(i),
+                None => Vec::new(),
+            };
+            // The break character stretches over the rest of the row, as in Vim.
+            if cut.is_some()
+                && let Some(last) = row.last().cloned()
+            {
+                let used: usize = row.iter().map(|g| usize::from(g.width)).sum();
+                for _ in used..width {
+                    row.push(Glyph {
+                        symbol: " ".into(),
+                        width: 1,
+                        ..last.clone()
+                    });
+                }
+            }
+            x = moved.iter().map(|g| usize::from(g.width)).sum();
+            rows.push(moved);
+        }
+        x += w;
+        rows.last_mut().expect("a row").push(g);
+    }
+    LineLayout { rows }
+}
+
 /// How Vim displays characters that can't be printed as themselves: `^X` for C0 controls and
 /// DEL, `<hex>` for C1 controls and zero-width characters.
 fn special_rendering(grapheme: &str, first: char) -> Option<String> {
@@ -187,6 +238,17 @@ mod tests {
             ["a^A^?<85>"]
         );
         assert_eq!(render(&layout_line("x\u{200b}y", 8, None)), ["x<200b>y"]);
+    }
+
+    #[test]
+    fn linebreak_breaks_after_blanks() {
+        let l = layout_line_linebreak("aaa bbb ccc", 8, 9);
+        assert_eq!(render(&l), ["aaa bbb  ", "ccc"]);
+        // A word longer than the row is cut anyway.
+        let l = layout_line_linebreak("abcdefghijk", 8, 5);
+        assert_eq!(render(&l), ["abcde", "fghij", "k"]);
+        let l = layout_line_linebreak("a b", 8, 10);
+        assert_eq!(render(&l), ["a b"]);
     }
 
     #[test]

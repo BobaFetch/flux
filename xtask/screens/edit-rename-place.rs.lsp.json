@@ -1,0 +1,9 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-16", "renameProvider": { "prepareProvider": true } },
+  "on": {
+    "textDocument/prepareRename": { "result": { "range": { "start": { "line": 1, "character": 8 }, "end": { "line": 1, "character": 13 } }, "placeholder": "total_sum" } },
+    "textDocument/rename": { "result": { "documentChanges": [ { "textDocument": { "uri": "$URI", "version": null }, "edits": [
+      { "range": { "start": { "line": 1, "character": 8 }, "end": { "line": 1, "character": 13 } }, "newText": "total_sum" },
+      { "range": { "start": { "line": 2, "character": 4 }, "end": { "line": 2, "character": 9 } }, "newText": "total_sum" } ] } ] } }
+  }
+}

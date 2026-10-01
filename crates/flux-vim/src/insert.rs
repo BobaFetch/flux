@@ -109,6 +109,11 @@ impl Engine {
             return;
         }
 
+        // Completion keys, and keys typed while completing (see `crate::completion`).
+        if self.insert_completion_key(editor, key) {
+            return;
+        }
+
         let ctrl = |c| key == Key::ctrl(c);
         match key.code {
             KeyCode::Esc => self.leave_insert(editor),
@@ -133,6 +138,8 @@ impl Engine {
             | KeyCode::Home
             | KeyCode::End => self.arrow(editor, key.code),
             _ if ctrl('f') => self.ctrl_f(editor),
+            // Neovim maps it to `vim.lsp.buf.signature_help()`.
+            _ if ctrl('s') => crate::lsp::signature::request(editor),
             KeyCode::Char(c) if key.mods == Modifiers::NONE => self.insert_char(editor, c),
             _ => {}
         }
@@ -141,6 +148,8 @@ impl Engine {
     /// A typed character, which may reindent the line before or after it goes in
     /// ('indentkeys').
     fn insert_char(&mut self, editor: &mut Editor, c: char) {
+        // Floats close when a character is typed (Neovim's InsertCharPre).
+        editor.close_floats();
         let cindent = indent::cindent_on(editor);
         let cur = editor.cursor();
         let white = util::in_indent(&util::line(editor, cur.line), cur.col);
@@ -336,6 +345,64 @@ impl Engine {
             && indent::in_cinkeys(editor, Typed::Char('\u{6}'), When::Instead, white)
         {
             self.reindent_typed(editor);
+        }
+    }
+
+    /// Let completion handle `key` first. A key it uses up isn't recorded for `.`: what it
+    /// changed is (see [`Engine::redo_retype`]).
+    fn insert_completion_key(&mut self, editor: &mut Editor, key: Key) -> bool {
+        // `<Tab>` jumps in a snippet.
+        if self.snippet_key(editor, key) {
+            return true;
+        }
+        let recorded = !self.state().repeating;
+        let mut in_dot = false;
+        if recorded {
+            self.state().typed.pop();
+            if key != Key::ctrl('o')
+                && let Some(rec) = self.recording.as_mut()
+                && rec.keys.last() == Some(&key)
+            {
+                rec.keys.pop();
+                in_dot = true;
+            }
+        }
+        let used = self.completion_key(editor, key);
+        if recorded && !used {
+            if let Some(ins) = self.insert.as_mut() {
+                ins.typed.push(key);
+            }
+            if in_dot && let Some(rec) = self.recording.as_mut() {
+                rec.keys.push(key);
+            }
+        }
+        used
+    }
+
+    /// Record that the typed text `base` became `now`: as many `<BS>` as needed to get back
+    /// to what they share, and the rest typed.
+    pub(crate) fn redo_retype(&mut self, base: &str, now: &str) {
+        let common = base
+            .chars()
+            .zip(now.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let back = base.chars().count() - common;
+        let rest: String = now.chars().skip(common).collect();
+        let mut keys = vec![Key::plain(KeyCode::Backspace); back];
+        keys.extend(rest.chars().map(Key::char));
+        if let Some(ins) = self.insert.as_mut() {
+            if ins.repeating {
+                return;
+            }
+            ins.typed.extend(keys.iter().copied());
+            for _ in 0..back {
+                ins.inserted.pop();
+            }
+            ins.inserted.push_str(&rest);
+        }
+        if let Some(rec) = self.recording.as_mut() {
+            rec.keys.extend(keys);
         }
     }
 
@@ -731,6 +798,7 @@ impl Engine {
             }
         }
         self.commit(editor);
+        editor.lsp_show_held_diagnostics();
         if let Some(dot) = self.recording.take() {
             self.set_dot(dot);
         }

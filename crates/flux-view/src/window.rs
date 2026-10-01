@@ -167,6 +167,22 @@ impl Window {
         }
     }
 
+    /// Where the cursor is drawn within the window's text area: (row, column). `insert` puts
+    /// it at the start of a tab.
+    pub fn cursor_screen_offset(&self, m: &Metrics, insert: bool) -> (usize, usize) {
+        let layout = layout_line(&m.text.line_str(self.cursor.line), m.tabstop, Some(m.width));
+        let (_, x) = layout.cursor_position(self.cursor.col, insert);
+        let skipped = if self.cursor.line == self.top {
+            self.skip_rows()
+        } else {
+            0
+        };
+        (
+            self.cursor_row(m).saturating_sub(skipped),
+            x.min(m.width.saturating_sub(1)),
+        )
+    }
+
     /// Screen row of the cursor within the window.
     fn cursor_row(&self, m: &Metrics) -> usize {
         let above: usize = (self.top..self.cursor.line).map(|l| m.rows(l)).sum();

@@ -6,6 +6,7 @@ use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::queue;
 use crossterm::style::{
     Attribute, Color as TermColor, Print, SetAttribute, SetBackgroundColor, SetForegroundColor,
+    SetUnderlineColor,
 };
 use crossterm::terminal::{BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate};
 
@@ -114,6 +115,10 @@ fn apply_style(out: &mut impl Write, style: Style) -> io::Result<()> {
         SetForegroundColor(term_color(style.fg)),
         SetBackgroundColor(term_color(style.bg)),
     )?;
+    // Like Neovim's TUI, the underline color goes out only with an underline.
+    if style.sp != Color::Reset && (style.underline || style.undercurl) {
+        queue!(out, SetUnderlineColor(term_color(style.sp)))?;
+    }
     for (on, attribute) in [
         (style.bold, Attribute::Bold),
         (style.italic, Attribute::Italic),

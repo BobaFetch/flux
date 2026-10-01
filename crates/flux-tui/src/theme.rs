@@ -21,6 +21,7 @@ fn style(a: HlAttr) -> Style {
     Style {
         fg: color(a.fg),
         bg: color(a.bg),
+        sp: color(a.sp),
         bold: a.bold,
         italic: a.italic,
         underline: a.underline,
@@ -40,6 +41,7 @@ pub struct Theme {
     pub special_key: Style,
     pub directory: Style,
     pub error_msg: Style,
+    pub warning_msg: Style,
     pub visual: Style,
     pub search: Style,
     pub cur_search: Style,
@@ -54,8 +56,15 @@ pub struct Theme {
     pub more_msg: Style,
     pub mode_msg: Style,
     pub question: Style,
+    pub sign_column: Style,
+    /// DiagnosticSign{Error,Warn,Info,Hint} and DiagnosticUnderline…, by severity (1–4).
+    pub diagnostic_sign: [Style; 4],
+    pub diagnostic_underline: [Style; 4],
     /// Tree-sitter captures looked up so far (`keyword.function` → `@keyword.function`).
     captures: RefCell<HashMap<&'static str, Style>>,
+    /// Other groups looked up so far.
+    groups: RefCell<HashMap<String, Style>>,
+    pub normal_float: Style,
 }
 
 impl Theme {
@@ -75,6 +84,7 @@ impl Theme {
             special_key: relative(g("SpecialKey")),
             directory: relative(g("Directory")),
             error_msg: relative(g("ErrorMsg")),
+            warning_msg: relative(g("WarningMsg")),
             visual: relative(g("Visual")),
             search: relative(g("Search")),
             cur_search: relative(g("CurSearch")),
@@ -89,8 +99,24 @@ impl Theme {
             more_msg: relative(g("MoreMsg")),
             mode_msg: relative(g("ModeMsg")),
             question: relative(g("Question")),
+            sign_column: relative(g("SignColumn")),
+            diagnostic_sign: ["Error", "Warn", "Info", "Hint"]
+                .map(|s| relative(g(&format!("DiagnosticSign{s}")))),
+            diagnostic_underline: ["Error", "Warn", "Info", "Hint"]
+                .map(|s| relative(g(&format!("DiagnosticUnderline{s}")))),
             captures: RefCell::default(),
+            groups: RefCell::default(),
+            normal_float: g("NormalFloat"),
         }
+    }
+
+    /// The style of highlight group `name`.
+    pub fn group(&self, name: &str) -> Style {
+        *self
+            .groups
+            .borrow_mut()
+            .entry(name.to_string())
+            .or_insert_with(|| style(highlight::resolve(name, self.light, self.gui)))
     }
 
     /// The style of tree-sitter capture `name`.

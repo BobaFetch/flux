@@ -1,0 +1,116 @@
+{
+ "capabilities": {
+  "textDocumentSync": {
+   "openClose": true,
+   "change": 2
+  },
+  "positionEncoding": "utf-16",
+  "semanticTokensProvider": {
+   "legend": {
+    "tokenTypes": [
+     "struct",
+     "property",
+     "type",
+     "function",
+     "parameter",
+     "variable",
+     "string",
+     "macro",
+     "enumMember"
+    ],
+    "tokenModifiers": [
+     "declaration",
+     "defaultLibrary",
+     "readonly",
+     "deprecated",
+     "static"
+    ]
+   },
+   "full": {
+    "delta": true
+   }
+  }
+ },
+ "on": {
+  "textDocument/semanticTokens/full": {
+   "result": {
+    "resultId": "1",
+    "data": [
+     0,
+     7,
+     5,
+     0,
+     1,
+     1,
+     4,
+     1,
+     1,
+     1,
+     0,
+     3,
+     3,
+     2,
+     2,
+     3,
+     3,
+     7,
+     3,
+     1,
+     0,
+     8,
+     1,
+     4,
+     1,
+     0,
+     3,
+     3,
+     2,
+     2,
+     0,
+     5,
+     1,
+     4,
+     1,
+     0,
+     3,
+     3,
+     2,
+     2,
+     0,
+     8,
+     3,
+     2,
+     2,
+     1,
+     8,
+     5,
+     5,
+     5,
+     0,
+     8,
+     1,
+     4,
+     0,
+     0,
+     4,
+     1,
+     4,
+     0,
+     1,
+     4,
+     7,
+     3,
+     8,
+     0,
+     8,
+     5,
+     5,
+     4
+    ]
+   }
+  },
+  "textDocument/semanticTokens/full/delta": {
+   "result": null
+  }
+ }
+}

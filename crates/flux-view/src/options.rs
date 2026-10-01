@@ -81,6 +81,8 @@ pub struct WindowOptions {
     pub number: bool,
     pub relativenumber: bool,
     pub numberwidth: usize,
+    /// 'signcolumn': `auto` (when there are signs), `yes`, or `no`.
+    pub signcolumn: String,
 }
 
 impl Default for WindowOptions {
@@ -89,6 +91,7 @@ impl Default for WindowOptions {
             number: false,
             relativenumber: false,
             numberwidth: 4,
+            signcolumn: "auto".into(),
         }
     }
 }
@@ -112,6 +115,11 @@ pub struct Options {
     /// 'termguicolors': 24-bit colors. flux turns it on when `$COLORTERM` says the terminal
     /// has them, as Neovim does.
     pub termguicolors: bool,
+    /// 'completeopt', 'pumheight' and 'pumwidth': how Insert-mode completion shows its
+    /// matches (see `flux_vim::completion`).
+    pub completeopt: String,
+    pub pumheight: usize,
+    pub pumwidth: usize,
     pub buffer: BufferOptions,
     pub window: WindowOptions,
 }
@@ -132,6 +140,9 @@ impl Default for Options {
             report: 2,
             background: "dark".into(),
             termguicolors: false,
+            completeopt: "menu,popup".into(),
+            pumheight: 0,
+            pumwidth: 15,
             buffer: BufferOptions::default(),
             window: WindowOptions::default(),
         }
@@ -179,6 +190,7 @@ pub const OPTIONS: &[OptionDef] = &[
     def("cinoptions", "cino", Kind::String, Scope::Buffer),
     def("cinwords", "cinw", Kind::String, Scope::Buffer),
     def("comments", "com", Kind::String, Scope::Buffer),
+    def("completeopt", "cot", Kind::String, Scope::Global),
     def("expandtab", "et", Kind::Bool, Scope::Buffer),
     def("filetype", "ft", Kind::String, Scope::Buffer),
     def("formatoptions", "fo", Kind::String, Scope::Buffer),
@@ -191,9 +203,12 @@ pub const OPTIONS: &[OptionDef] = &[
     def("indentkeys", "indk", Kind::String, Scope::Buffer),
     def("matchpairs", "mps", Kind::String, Scope::Buffer),
     def("number", "nu", Kind::Bool, Scope::Window),
+    def("pumheight", "ph", Kind::Number, Scope::Global),
+    def("pumwidth", "pw", Kind::Number, Scope::Global),
     def("numberwidth", "nuw", Kind::Number, Scope::Window),
     def("relativenumber", "rnu", Kind::Bool, Scope::Window),
     def("report", "", Kind::Number, Scope::Global),
+    def("signcolumn", "scl", Kind::String, Scope::Window),
     def("shiftwidth", "sw", Kind::Number, Scope::Buffer),
     def("smartcase", "scs", Kind::Bool, Scope::Global),
     def("smarttab", "sta", Kind::Bool, Scope::Global),
@@ -239,6 +254,9 @@ impl Options {
             "report" => Value::Number(self.report as i64),
             "background" => Value::String(self.background.clone()),
             "termguicolors" => Value::Bool(self.termguicolors),
+            "completeopt" => Value::String(self.completeopt.clone()),
+            "pumheight" => Value::Number(self.pumheight as i64),
+            "pumwidth" => Value::Number(self.pumwidth as i64),
             _ => return b.get(name).or_else(|| w.get(name)),
         })
     }
@@ -258,6 +276,9 @@ impl Options {
             ("report", Value::Number(x)) => self.report = x.max(0) as usize,
             ("background", Value::String(x)) => self.background = x,
             ("termguicolors", Value::Bool(x)) => self.termguicolors = x,
+            ("completeopt", Value::String(x)) => self.completeopt = x,
+            ("pumheight", Value::Number(x)) => self.pumheight = x.max(0) as usize,
+            ("pumwidth", Value::Number(x)) => self.pumwidth = x.max(0) as usize,
             (_, v) => {
                 self.buffer.set(name, v.clone());
                 self.window.set(name, v);
@@ -318,6 +339,7 @@ impl WindowOptions {
             "number" => Value::Bool(self.number),
             "relativenumber" => Value::Bool(self.relativenumber),
             "numberwidth" => Value::Number(self.numberwidth as i64),
+            "signcolumn" => Value::String(self.signcolumn.clone()),
             _ => return None,
         })
     }
@@ -327,6 +349,7 @@ impl WindowOptions {
             ("number", Value::Bool(x)) => self.number = x,
             ("relativenumber", Value::Bool(x)) => self.relativenumber = x,
             ("numberwidth", Value::Number(x)) => self.numberwidth = x.clamp(1, 20) as usize,
+            ("signcolumn", Value::String(x)) => self.signcolumn = x,
             _ => {}
         }
     }

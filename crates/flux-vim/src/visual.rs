@@ -22,6 +22,10 @@ impl Engine {
     }
 
     pub(crate) fn visual_key(&mut self, editor: &mut Editor, key: Key) {
+        // Select mode (a snippet's placeholder) and snippet jumps.
+        if self.select_key(editor, key) {
+            return;
+        }
         // A message shown over the mode (after a search) lasts until the next key.
         editor.message = None;
         self.visual_pending.push(key);
@@ -190,6 +194,8 @@ impl Engine {
                 }
             }
             VisualAction::Exit => self.exit_visual(editor),
+            // Neovim's mapping runs in Visual mode, which goes on.
+            VisualAction::CodeAction => crate::lsp::code_action::request(editor),
             VisualAction::CmdLine => {
                 self.exit_visual(editor);
                 self.enter_cmdline(editor);
@@ -343,7 +349,7 @@ impl Engine {
         let range = self.visual_range(editor, lines);
         let size = self.visual_size(editor, lines);
         self.exit_visual(editor);
-        if op.changes_text() && editor.current_buffer().directory {
+        if op.changes_text() && editor.current_buffer().nomodifiable() {
             editor.error(flux_view::explorer::NOT_MODIFIABLE);
             self.failed = true;
             return;

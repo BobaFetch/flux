@@ -20,6 +20,10 @@ pub enum Operator {
     ToggleCase,
     /// `=`: reindent lines.
     Reindent,
+    /// `gq`: format lines ('formatexpr', or to 'textwidth').
+    Format,
+    /// `gw`: format lines to 'textwidth', keeping the cursor on its text.
+    FormatKeep,
 }
 
 impl Operator {
@@ -125,6 +129,39 @@ pub enum Action {
     RepeatSubstitute {
         all: bool,
     },
+    /// Neovim's default LSP and diagnostic keys.
+    Lsp(LspCmd),
+    /// Keys that run an Ex command with the count (Neovim's `]q`, `[l`, …, and `CTRL-T`):
+    /// with `count1`, a count of 1 when none is given.
+    ExCount {
+        cmd: &'static str,
+        count1: bool,
+    },
+}
+
+/// The keys Neovim maps by default for language servers and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspCmd {
+    /// `]d`, `[d`: the next / previous diagnostic.
+    DiagnosticNext,
+    DiagnosticPrev,
+    /// `]D`, `[D`: the last / first diagnostic.
+    DiagnosticLast,
+    DiagnosticFirst,
+    /// `CTRL-W d`: the diagnostics at the cursor in a floating window.
+    DiagnosticFloat,
+    /// `K`
+    Hover,
+    /// `CTRL-]` (through 'tagfunc'): go to the definition.
+    Definition,
+    /// `grr`, `gri`, `grt`, `gO`
+    References,
+    Implementation,
+    TypeDefinition,
+    DocumentSymbol,
+    /// `grn`, `gra`
+    Rename,
+    CodeAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,6 +284,29 @@ pub fn parse(keys: &[Key], recording: bool) -> Parse {
     }
 }
 
+/// Neovim's quickfix and location list keys after `]` (`next`) or `[`: `]q` is `:cnext`,
+/// `[Q` `:crewind`, `]<C-Q>` `:cnfile`, and the same with `l` for location lists.
+fn list_key(key: Key, next: bool) -> Option<Action> {
+    let (cmd, count1) = if key == Key::ctrl('q') {
+        (if next { "cnfile" } else { "cpfile" }, true)
+    } else if key == Key::ctrl('l') {
+        (if next { "lnfile" } else { "lpfile" }, true)
+    } else {
+        match (key.typed_char()?, next) {
+            ('q', true) => ("cnext", true),
+            ('q', false) => ("cprevious", true),
+            ('Q', true) => ("clast", false),
+            ('Q', false) => ("crewind", false),
+            ('l', true) => ("lnext", true),
+            ('l', false) => ("lprevious", true),
+            ('L', true) => ("llast", false),
+            ('L', false) => ("lrewind", false),
+            _ => return None,
+        }
+    };
+    Some(Action::ExCount { cmd, count1 })
+}
+
 type Parsed = Option<(Option<char>, Option<usize>, Action)>;
 
 fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
@@ -271,7 +331,26 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
 
     let key = k.next()?;
     if key == Key::ctrl('w') {
-        return Ok(window_command(k.next()?).map(|cmd| (register, count, Action::Window(cmd))));
+        let next = k.next()?;
+        if next.typed_char() == Some('d') || next == Key::ctrl('d') {
+            return Ok(Some((
+                register,
+                count,
+                Action::Lsp(LspCmd::DiagnosticFloat),
+            )));
+        }
+        return Ok(window_command(next).map(|cmd| (register, count, Action::Window(cmd))));
+    }
+    // Terminals send `CTRL-]` as the byte crossterm reads as `CTRL-5`.
+    if key == Key::ctrl(']') || key == Key::ctrl('5') {
+        return Ok(Some((register, count, Action::Lsp(LspCmd::Definition))));
+    }
+    if key == Key::ctrl('t') {
+        let action = Action::ExCount {
+            cmd: "pop",
+            count1: false,
+        };
+        return Ok(Some((register, count, action)));
     }
     let action = match key.typed_char() {
         Some(c) => match c {
@@ -379,10 +458,37 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
                 Some('Q') => Some(Action::QuitDiscard),
                 _ => None,
             },
+            'K' => Some(Action::Lsp(LspCmd::Hover)),
+            ']' | '[' => {
+                let next = c == ']';
+                let key = k.next()?;
+                if let Some(cmd) = list_key(key, next) {
+                    Some(cmd)
+                } else {
+                    match key.typed_char() {
+                        Some('d') if next => Some(Action::Lsp(LspCmd::DiagnosticNext)),
+                        Some('d') => Some(Action::Lsp(LspCmd::DiagnosticPrev)),
+                        Some('D') if next => Some(Action::Lsp(LspCmd::DiagnosticLast)),
+                        Some('D') => Some(Action::Lsp(LspCmd::DiagnosticFirst)),
+                        _ => None,
+                    }
+                }
+            }
             'g' => match k.next()?.typed_char() {
+                Some('O') => Some(Action::Lsp(LspCmd::DocumentSymbol)),
+                Some('r') => match k.next()?.typed_char() {
+                    Some('r') => Some(Action::Lsp(LspCmd::References)),
+                    Some('i') => Some(Action::Lsp(LspCmd::Implementation)),
+                    Some('t') => Some(Action::Lsp(LspCmd::TypeDefinition)),
+                    Some('n') => Some(Action::Lsp(LspCmd::Rename)),
+                    Some('a') => Some(Action::Lsp(LspCmd::CodeAction)),
+                    _ => None,
+                },
                 Some('~') => operator(k, Operator::ToggleCase, '~', &mut count)?,
                 Some('u') => operator(k, Operator::Lowercase, 'u', &mut count)?,
                 Some('U') => operator(k, Operator::Uppercase, 'U', &mut count)?,
+                Some('q') => operator(k, Operator::Format, 'q', &mut count)?,
+                Some('w') => operator(k, Operator::FormatKeep, 'w', &mut count)?,
                 Some('J') => Some(Action::Join { spaces: false }),
                 Some('I') => Some(Action::Insert(InsertAt::LineStart)),
                 Some('v') => Some(Action::Reselect),
@@ -438,7 +544,11 @@ fn operator(
     let key = k.next()?;
     let is_g_op = matches!(
         op,
-        Operator::ToggleCase | Operator::Lowercase | Operator::Uppercase
+        Operator::ToggleCase
+            | Operator::Lowercase
+            | Operator::Uppercase
+            | Operator::Format
+            | Operator::FormatKeep
     );
     if key.typed_char() == Some(repeat) {
         return Ok(Some(Action::Operate(op, OpTarget::Lines)));
@@ -657,6 +767,8 @@ pub enum VisualAction {
     CmdLine,
     Scroll(Scroll),
     SetMark(char),
+    /// `gra`: code actions for the selection.
+    CodeAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -759,6 +871,12 @@ fn parse_visual_command(k: &mut Keys) -> Result<ParsedVisual, NeedMore> {
                 Some('~') => Some(V::Operate(Operator::ToggleCase)),
                 Some('u') => Some(V::Operate(Operator::Lowercase)),
                 Some('U') => Some(V::Operate(Operator::Uppercase)),
+                Some('q') => Some(V::Operate(Operator::Format)),
+                Some('w') => Some(V::Operate(Operator::FormatKeep)),
+                Some('r') => match k.next()?.typed_char() {
+                    Some('a') => Some(V::CodeAction),
+                    _ => None,
+                },
                 Some(c) => g_motion(c).map(V::Move),
                 None => None,
             },
@@ -825,7 +943,7 @@ mod tests {
         for keys in ["", "d", "2d3", "\"", "g", "f", "dt", "gu", "gug", "Z", "r"] {
             assert_eq!(parse(&parse_keys(keys), false), Parse::Incomplete, "{keys}");
         }
-        for keys in ["dz", "Q", "d<Esc>", "f<Esc>", "\"=", "gq", "<Esc>", "dis"] {
+        for keys in ["dz", "Q", "d<Esc>", "f<Esc>", "\"=", "gx", "<Esc>", "dis"] {
             assert_eq!(parse(&parse_keys(keys), false), Parse::Invalid, "{keys}");
         }
     }

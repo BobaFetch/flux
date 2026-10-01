@@ -11,6 +11,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::grid::{Grid, Style};
 use crate::theme::Theme;
 
+mod pum;
+
 /// Draw `editor` into `grid`, returning where the terminal cursor should go. `showcmd` is a
 /// partly typed command, shown at the bottom right as Vim's 'showcmd' does.
 pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, usize)> {
@@ -37,6 +39,10 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
             pane.draw_separator(grid);
         }
     }
+    for float in &editor.floats {
+        draw_float(editor, &theme, float, grid);
+    }
+    pum::draw(editor, &theme, grid);
     if let Some(pos) = draw_cmdline(editor, &theme, grid, height - 1) {
         cursor = Some(pos);
     }
@@ -104,24 +110,44 @@ impl Pane<'_> {
         let win = self.win;
         let text = self.text();
         let text_rows = self.text_rows(grid);
-        // The number column comes first; the text starts after it.
+        // The sign column and the number column come first; the text starts after them.
+        let diagnostics = self.editor.buffer_diagnostics(win.buffer);
+        let signw = flux_view::editor::sign_width(&win.opts.signcolumn, !diagnostics.is_empty());
         let numw = win
             .opts
             .number_width(text.line_count(), self.rect.height.max(1));
-        let (top_row, left) = (self.rect.row, self.rect.col + numw);
-        let width = self.rect.width.saturating_sub(numw).max(1);
+        let (top_row, left) = (self.rect.row, self.rect.col + signw + numw);
+        let width = self.rect.width.saturating_sub(signw + numw).max(1);
         let insert = self.is_current() && self.editor.mode == Mode::Insert;
         let mut cursor = None;
-        // The number column is LineNr even where a wrapped line has no number.
+        // The sign column is SignColumn and the number column LineNr, also where a wrapped line
+        // has no sign or number.
         for r in 0..text_rows.min(self.rect.height) {
-            for x in 0..numw {
+            for x in 0..signw {
+                grid.set(
+                    self.rect.col + x,
+                    top_row + r,
+                    " ",
+                    1,
+                    self.theme.sign_column,
+                );
+            }
+            for x in signw..signw + numw {
                 grid.set(self.rect.col + x, top_row + r, " ", 1, self.theme.line_nr);
             }
         }
+        // A diagnostic's sign goes on its first line. They all have the same priority, so the
+        // last one placed shows.
+        let mut signs: std::collections::HashMap<usize, u8> = std::collections::HashMap::new();
+        for (start, _, d) in &diagnostics {
+            signs.insert(start.line, d.severity);
+        }
+        let numx = self.rect.col + signw;
         let mut row = 0;
         let mut line = win.top;
         let shown_lines = win.top..(win.top + text_rows).min(text.line_count());
         let matches = self.search_matches(shown_lines.clone());
+        let semantic = self.semantic_tokens(shown_lines.clone());
         let syntax = self.syntax_spans(shown_lines);
         while row < text_rows && line < text.line_count() {
             let mut layout = layout_line(
@@ -141,7 +167,7 @@ impl Pane<'_> {
             if !fits && line != win.top {
                 // Vim's `display=lastline`: show what fits and mark the cut with `@@@`.
                 if numw > 0 {
-                    self.draw_number(grid, line, top_row + row, numw);
+                    self.draw_number(grid, line, numx, top_row + row, numw);
                 }
                 draw_rows(
                     grid,
@@ -160,7 +186,20 @@ impl Pane<'_> {
             }
             let shown = layout.row_count().min(text_rows - row);
             if numw > 0 {
-                self.draw_number(grid, line, top_row + row, numw);
+                self.draw_number(grid, line, numx, top_row + row, numw);
+            }
+            if signw > 0
+                && let Some(&severity) = signs.get(&line)
+            {
+                let sign = ["E ", "W ", "I ", "H "][usize::from(severity - 1)];
+                let style = self.theme.diagnostic_sign[usize::from(severity - 1)];
+                grid.put_str_until(
+                    self.rect.col,
+                    top_row + row,
+                    sign,
+                    style,
+                    self.rect.col + signw,
+                );
             }
             draw_rows(grid, self.theme, &layout, left, top_row + row, shown);
             let at = Paint {
@@ -178,6 +217,95 @@ impl Pane<'_> {
                 if span.url.is_some() {
                     at.link(grid, (span.start, span.end), &span.url);
                 }
+            }
+            // LSP semantic tokens (priorities 125–127, over tree-sitter's 100).
+            for (s, e, group, _) in semantic
+                .iter()
+                .filter(|h| h.0.line <= line && line <= h.1.line)
+            {
+                let from = if s.line == line { s.col } else { 0 };
+                let to = if e.line == line {
+                    e.col
+                } else {
+                    text.line_len(line)
+                };
+                if from < to {
+                    at.paint(grid, (from, to), self.theme.group(group), false);
+                }
+            }
+            // A quickfix window: Vim's `syntax/qf.vim`, and the current entry in QuickFixLine
+            // over it.
+            if self.buffer().quickfix.is_some() {
+                let s = text.line_str(line);
+                for (from, to, group) in flux_view::quickfix::line_highlights(&s) {
+                    at.paint(grid, (from, to), self.theme.group(group), false);
+                }
+                if self
+                    .editor
+                    .qf_list_of(win.buffer)
+                    .is_some_and(|l| l.idx == line)
+                {
+                    let style = self.theme.group("QuickFixLine");
+                    at.paint(grid, (0, text.line_len(line)), style, false);
+                }
+            }
+            // A snippet's tabstops.
+            if win.id == self.editor.window.id {
+                for &(s, e, active) in &self.editor.completion.snippet {
+                    if s.line <= line && line <= e.line {
+                        let from = if s.line == line { s.col } else { 0 };
+                        let to = if e.line == line {
+                            e.col
+                        } else {
+                            text.line_len(line)
+                        };
+                        let group = if active {
+                            "SnippetTabstopActive"
+                        } else {
+                            "SnippetTabstop"
+                        };
+                        at.paint(grid, (from, to), self.theme.group(group), false);
+                    }
+                }
+            }
+            // A hover float's range (LspReferenceTarget).
+            for f in &self.editor.floats {
+                if f.window != win.id {
+                    continue;
+                }
+                if let Some((s, e)) = f.target
+                    && s.line <= line
+                    && line <= e.line
+                {
+                    let from = if s.line == line { s.col } else { 0 };
+                    let to = if e.line == line {
+                        e.col
+                    } else {
+                        text.line_len(line)
+                    };
+                    at.paint(
+                        grid,
+                        (from, to),
+                        self.theme.group("LspReferenceTarget"),
+                        false,
+                    );
+                }
+            }
+            // Diagnostics are underlined, the most severe last.
+            let mut on_line: Vec<_> = diagnostics
+                .iter()
+                .filter(|(s, e, _)| s.line <= line && line <= e.line)
+                .collect();
+            on_line.sort_by_key(|(_, _, d)| std::cmp::Reverse(d.severity));
+            for (s, e, d) in on_line {
+                let from = if s.line == line { s.col } else { 0 };
+                let to = if e.line == line {
+                    e.col
+                } else {
+                    text.line_len(line)
+                };
+                let style = self.theme.diagnostic_underline[usize::from(d.severity - 1)];
+                at.paint(grid, (from, to.max(from)), style, false);
             }
             if self.buffer().directory && text.line_str(line).ends_with('/') {
                 let len = text.line_len(line);
@@ -242,7 +370,7 @@ impl Pane<'_> {
 
     /// The number column for `line`: its number ('number'), its distance from the cursor line
     /// ('relativenumber'), or both (the cursor line's own number, left-aligned).
-    fn draw_number(&self, grid: &mut Grid, line: usize, y: usize, numw: usize) {
+    fn draw_number(&self, grid: &mut Grid, line: usize, x: usize, y: usize, numw: usize) {
         let opts = &self.win.opts;
         let cur = self.win.cursor.line;
         let digits = numw - 1;
@@ -257,7 +385,7 @@ impl Pane<'_> {
         };
         // CursorLineNr is only for 'cursorline', which flux doesn't have.
         let style = self.theme.line_nr;
-        grid.put_str_until(self.rect.col, y, &s, style, self.rect.col + numw);
+        grid.put_str_until(x, y, &s, style, x + numw);
     }
 
     /// Matches to highlight in `lines`: every match of the last search pattern with
@@ -279,7 +407,7 @@ impl Pane<'_> {
                 .collect();
         }
         let text = &self.buffer().text;
-        let typing = editor.mode == Mode::CmdLine && editor.cmdline_kind != ':';
+        let typing = editor.mode == Mode::CmdLine && !matches!(editor.cmdline_kind, ':' | '@');
         let incsearch = if typing && self.is_current() {
             editor.incsearch
         } else {
@@ -332,6 +460,23 @@ impl Pane<'_> {
             Some(syntax) => syntax.highlights(&buffer.text, lines),
             None => Vec::new(),
         }
+    }
+
+    /// The semantic token highlights on `lines`, in paint order (none while `:s` previews a
+    /// change).
+    fn semantic_tokens(
+        &self,
+        lines: std::ops::Range<usize>,
+    ) -> Vec<(flux_view::Cursor, flux_view::Cursor, &str, u8)> {
+        let editor = self.editor;
+        let previewed = self.win.buffer == editor.window.buffer
+            && editor.preview.as_ref().is_some_and(|p| p.changed);
+        if previewed {
+            return Vec::new();
+        }
+        let mut out = editor.semantic_token_highlights(self.win.buffer);
+        out.retain(|(s, e, _, _)| s.line < lines.end && e.line >= lines.start);
+        out
     }
 
     /// The selected chars of `line` as `[from, to)` ranges, drawn the way Neovim draws them:
@@ -409,6 +554,16 @@ impl Pane<'_> {
             }
         }
         let buffer = self.buffer();
+        if buffer.quickfix.is_some() {
+            // The statusline `ftplugin/qf.vim` sets: the list's title, and the ruler.
+            let name = match self.editor.qf_list_of(self.win.buffer) {
+                Some(list) => format!("{} {} ", buffer.name(), list.title),
+                None => format!("{} ", buffer.name()),
+            };
+            let ruler = format!("{:<15} {}", self.cursor_ruler(), self.relative_position());
+            self.put_statusline(grid, y, &name, vec![(ruler, style)], style);
+            return;
+        }
         let ruler = format!("{:<14} {}", self.cursor_ruler(), self.relative_position());
         // `%f %h%w%m%r `: the name, a space, the flags and another space.
         let current = self.win.buffer == self.editor.window.buffer;
@@ -420,18 +575,75 @@ impl Pane<'_> {
             ""
         };
         let name = format!("{} {flags} ", buffer.name());
-        let (name_width, ruler_width) = (
-            UnicodeWidthStr::width(name.as_str()),
-            UnicodeWidthStr::width(ruler.as_str()),
-        );
-        if name_width + ruler_width <= width {
+        // Neovim's default statusline shows the buffer's diagnostics before the ruler
+        // (`vim.diagnostic.status()`): `E:1 W:2 `, each in its sign's color.
+        let mut right: Vec<(String, Style)> = Vec::new();
+        let mut counts = [0usize; 4];
+        for (_, _, d) in self.editor.buffer_diagnostics(self.win.buffer) {
+            counts[usize::from(d.severity - 1)] += 1;
+        }
+        let mut first = true;
+        for (i, n) in counts.iter().enumerate().filter(|(_, n)| **n > 0) {
+            let seg_style = style.combine(self.theme.diagnostic_sign[i]);
+            if !first && let Some(last) = right.last_mut() {
+                last.0.push(' ');
+            }
+            first = false;
+            right.push((format!("{}:{n}", ["E", "W", "I", "H"][i]), seg_style));
+        }
+        if !right.is_empty() {
+            right.push((" ".into(), style));
+        }
+        right.push((ruler, style));
+        self.put_statusline(grid, y, &name, right, style);
+    }
+
+    /// A statusline's text: `name` on the left and `right` against the right edge, or when
+    /// that's too wide, the end of it all after a `<`.
+    fn put_statusline(
+        &self,
+        grid: &mut Grid,
+        y: usize,
+        name: &str,
+        right: Vec<(String, Style)>,
+        style: Style,
+    ) {
+        let left = self.rect.col;
+        let width = self.rect.width;
+        let name_width = UnicodeWidthStr::width(name);
+        let right_width: usize = right
+            .iter()
+            .map(|(t, _)| UnicodeWidthStr::width(t.as_str()))
+            .sum();
+        if name_width + right_width <= width {
             // `%=` pushes the ruler to the right edge.
-            grid.put_str_until(left, y, &name, style, left + width);
-            grid.put_str_until(left + width - ruler_width, y, &ruler, style, left + width);
+            grid.put_str_until(left, y, name, style, left + width);
+            let mut x = left + width - right_width;
+            for (t, st) in &right {
+                x = grid.put_str_until(x, y, t, *st, left + width);
+            }
         } else {
             // Too wide: `%<` at the start cuts the front off everything, marked with `<`.
-            let text = truncate_left(&format!("{name}{ruler}"), width);
-            grid.put_str_until(left, y, &text, style, left + width);
+            let mut cells: Vec<(&str, Style)> = name.graphemes(true).map(|g| (g, style)).collect();
+            for (t, st) in &right {
+                cells.extend(t.graphemes(true).map(|g| (g, *st)));
+            }
+            let mut kept = Vec::new();
+            let mut used = 1;
+            for &(g, st) in cells.iter().rev() {
+                let w = UnicodeWidthStr::width(g);
+                if used + w > width {
+                    break;
+                }
+                kept.push((g, st));
+                used += w;
+            }
+            if width > 0 {
+                let mut x = grid.put_str_until(left, y, "<", style, left + width);
+                for (g, st) in kept.into_iter().rev() {
+                    x = grid.put_str_until(x, y, g, st, left + width);
+                }
+            }
         }
     }
 
@@ -445,7 +657,10 @@ impl Pane<'_> {
 
     /// `%l,%c%V`: line, byte column and, when different, screen column. An empty line is `0-1`.
     fn cursor_ruler(&self) -> String {
-        let cursor = self.win.cursor;
+        let cursor = match self.editor.completion.ruler_cursor {
+            Some(c) if self.is_current() => c,
+            _ => self.win.cursor,
+        };
         let text = self.text();
         let line = text.line_str(cursor.line.min(text.line_count().saturating_sub(1)));
         if line.is_empty() {
@@ -455,6 +670,11 @@ impl Pane<'_> {
             } else {
                 cursor.line + 1
             };
+            // In Insert mode an empty line's column is 1 (Neovim's `empty_line` is only for
+            // the other modes).
+            if self.is_current() && self.editor.mode == Mode::Insert {
+                return format!("{n},1");
+            }
             return format!("{n},0-1");
         }
         let byte_col = line
@@ -491,6 +711,74 @@ impl Pane<'_> {
         } else {
             format!("{:>2}%", above * 100 / (above + below))
         }
+    }
+}
+
+/// A floating window: its lines in NormalFloat, concealed and wrapped (with 'linebreak') at
+/// its width, with its buffer's syntax and its own highlights.
+fn draw_float(editor: &Editor, theme: &Theme, float: &flux_view::float::Float, grid: &mut Grid) {
+    let Some(buffer) = editor.buffer(float.buffer) else {
+        return;
+    };
+    let base = theme.normal_float;
+    for r in 0..float.height {
+        for x in 0..float.width {
+            grid.set(float.col + x, float.row + r, " ", 1, base);
+        }
+    }
+    let text = &buffer.text;
+    let spans = match &buffer.syntax {
+        Some(s) if editor.syntax_on => s.highlights(text, 0..text.line_count()),
+        _ => Vec::new(),
+    };
+    let mut row = 0;
+    for shown_line in editor.float_lines(float) {
+        if row >= float.height {
+            break;
+        }
+        let layout = shown_line.layout(
+            &text.line_str(shown_line.line),
+            buffer.opts.tabstop,
+            float.width,
+        );
+        let shown = layout.row_count().min(float.height - row);
+        for (r, glyphs) in layout.rows.iter().take(shown).enumerate() {
+            let mut x = float.col;
+            for glyph in glyphs {
+                let style = match glyph.kind {
+                    GlyphKind::Text | GlyphKind::Tab => base,
+                    GlyphKind::Special => base.combine(theme.special_key),
+                    GlyphKind::Filler => base.combine(theme.non_text),
+                };
+                grid.set(x, float.row + row + r, &glyph.symbol, glyph.width, style);
+                x += usize::from(glyph.width);
+            }
+        }
+        let at = Paint {
+            layout: &layout,
+            left: float.col,
+            width: float.width,
+            row: float.row + row,
+            rows: shown,
+        };
+        let line = shown_line.line;
+        for span in spans.iter().filter(|s| s.line == line) {
+            if !span.capture.is_empty() {
+                at.paint(
+                    grid,
+                    (span.start, span.end),
+                    theme.capture(span.capture),
+                    false,
+                );
+            }
+            if span.url.is_some() {
+                at.link(grid, (span.start, span.end), &span.url);
+            }
+        }
+        for h in float.highlights.iter().filter(|h| h.line == line) {
+            at.paint(grid, (h.start, h.end), theme.group(&h.group), false);
+        }
+        row += shown;
     }
 }
 
@@ -536,6 +824,17 @@ struct Paint<'a> {
     width: usize,
     row: usize,
     rows: usize,
+}
+
+impl Theme {
+    /// The style of a message: ErrorMsg, WarningMsg, or none.
+    fn message(&self, message: &flux_view::Message) -> Style {
+        match message.kind {
+            MessageKind::Error => self.error_msg,
+            MessageKind::Warning => self.warning_msg,
+            _ => Style::default(),
+        }
+    }
 }
 
 impl Paint<'_> {
@@ -663,28 +962,6 @@ fn truncate_middle(s: &str, room: usize) -> String {
     format!("{head}...{}", tail.concat())
 }
 
-/// Keep the end of `s`, as Vim's `%<` does, marking the cut with `<`.
-fn truncate_left(s: &str, room: usize) -> String {
-    if UnicodeWidthStr::width(s) <= room {
-        return s.to_owned();
-    }
-    if room == 0 {
-        return String::new();
-    }
-    let mut tail: Vec<&str> = Vec::new();
-    let mut used = 1;
-    for g in s.graphemes(true).rev() {
-        let w = UnicodeWidthStr::width(g);
-        if used + w > room {
-            break;
-        }
-        tail.push(g);
-        used += w;
-    }
-    tail.reverse();
-    format!("<{}", tail.concat())
-}
-
 /// Just the command line, over a screen left as it was (see `Editor::stale_screen`).
 pub fn draw_cmdline_only(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
     let y = grid.height().checked_sub(1)?;
@@ -702,7 +979,12 @@ fn draw_cmdline(
 ) -> Option<(usize, usize)> {
     match editor.mode {
         Mode::CmdLine => {
-            let line = format!("{}{}", editor.cmdline_kind, editor.cmdline);
+            // `input()` shows its prompt instead of a command line's type.
+            let head = match editor.cmdline_kind {
+                '@' => editor.cmdline_prompt.clone(),
+                kind => kind.to_string(),
+            };
+            let line = format!("{head}{}", editor.cmdline);
             let width = grid.width().max(1);
             // A command line too long for one row takes more, growing upward over the
             // screen with a blank row above it (Neovim's 'msgsep').
@@ -716,7 +998,10 @@ fn draw_cmdline(
             for (row, piece) in (first..).zip(flux_view::editor::wrap(&line, width)) {
                 grid.put_str(0, row, &piece, Style::default());
             }
-            let before: String = line.chars().take(editor.cmdline_pos + 1).collect();
+            let before: String = line
+                .chars()
+                .take(editor.cmdline_pos + head.chars().count())
+                .collect();
             let x = UnicodeWidthStr::width(before.as_str());
             Some((x % width, (first + x / width).min(y)))
         }
@@ -724,17 +1009,36 @@ fn draw_cmdline(
         // key.
         Mode::Visual if editor.message.is_some() => {
             let message = editor.message.as_ref()?;
-            let style = if message.is_error() {
-                theme.error_msg
-            } else {
-                Style::default()
-            };
+            let style = theme.message(message);
             grid.put_str(0, y, &message.text, style);
+            None
+        }
+        Mode::Insert if editor.completion.show_error && editor.message.is_some() => {
+            let message = editor.message.as_ref()?;
+            let end = grid.put_str(0, y, &message.text, theme.message(message));
+            Some((end.min(grid.width() - 1), y))
+        }
+        Mode::Insert if editor.completion.submode.text.is_some() => {
+            let submode = &editor.completion.submode;
+            let mut end = grid.put_str(0, y, "--", theme.mode_msg);
+            end = grid.put_str(
+                end,
+                y,
+                submode.text.as_deref().unwrap_or(""),
+                theme.mode_msg,
+            );
+            if let Some((extra, group)) = &submode.extra {
+                end = grid.put_str(end, y, " ", theme.mode_msg);
+                let style = group.map_or(theme.mode_msg, |g| theme.group(g));
+                grid.put_str(end, y, extra, style);
+            }
             None
         }
         Mode::Insert | Mode::Visual => {
             let mode = match (editor.mode, editor.visual.kind) {
                 (Mode::Insert, _) => "-- INSERT --",
+                (_, VisualKind::Char) if editor.completion.select => "-- SELECT --",
+                (_, VisualKind::Line) if editor.completion.select => "-- SELECT LINE --",
                 (_, VisualKind::Char) => "-- VISUAL --",
                 (_, VisualKind::Line) => "-- VISUAL LINE --",
             };
@@ -763,19 +1067,16 @@ fn draw_cmdline(
         }
         Mode::Normal => {
             if let Some(message) = &editor.message {
-                let style = if message.is_error() {
-                    theme.error_msg
-                } else {
-                    Style::default()
-                };
+                let style = theme.message(message);
                 // Room up to the showcmd column, like Vim's `msg_may_trunc`/`msg_strtrunc`.
                 let room = grid.width().saturating_sub(12).max(1);
                 let text = match message.kind {
                     MessageKind::Info => truncate_middle(&message.text, room),
                     MessageKind::File => truncate_start(&message.text, room),
-                    MessageKind::Full | MessageKind::Error | MessageKind::Question => {
-                        message.text.clone()
-                    }
+                    MessageKind::Full
+                    | MessageKind::Error
+                    | MessageKind::Warning
+                    | MessageKind::Question => message.text.clone(),
                 };
                 grid.put_str(0, y, &text, style);
             }
@@ -804,11 +1105,7 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
     let wrapped = editor.message_lines();
     let lines: Vec<&str> = wrapped.iter().map(String::as_str).collect();
     let height = grid.height();
-    let style = if message.is_error() {
-        theme.error_msg
-    } else {
-        Style::default()
-    };
+    let style = theme.message(message);
     if let Some(top) = editor.more_top {
         // A page of a long message, then `-- More --` (or the prompt on the last page).
         let page = height.saturating_sub(1);
@@ -819,6 +1116,7 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
         }
         for (i, line) in lines[top..(top + page).min(lines.len())].iter().enumerate() {
             grid.put_str(0, i, line, style);
+            message_highlights(editor, theme, grid, top + i, i);
         }
         let (prompt, prompt_style) = if top < last_top && editor.more_help {
             (
@@ -833,22 +1131,83 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
         let end = grid.put_str(0, height - 1, prompt, prompt_style);
         return Some((end.min(grid.width() - 1), height - 1));
     }
-    let rows = (lines.len() + 2).min(height);
+    // What was on the command line before the message (a list and the answer typed to it)
+    // stays above it.
+    let width = grid.width().max(1);
+    let mut styled: Vec<(&str, Style)> = Vec::new();
+    let above: Vec<String> = editor
+        .message_above
+        .as_deref()
+        .map(|a| {
+            a.lines()
+                .flat_map(|l| flux_view::editor::wrap(l, width))
+                .collect()
+        })
+        .unwrap_or_default();
+    styled.extend(above.iter().map(|l| (l.as_str(), Style::default())));
+    styled.extend(lines.iter().map(|l| (*l, style)));
+    let rows = (styled.len() + 2).min(height);
     let first = height - rows;
     for y in first..height {
         grid.fill_row(y, Style::default());
     }
     let shown = rows.saturating_sub(2);
-    for (i, line) in lines[lines.len() - shown..].iter().enumerate() {
-        grid.put_str(0, first + 1 + i, line, style);
+    for (i, (line, style)) in styled[styled.len() - shown..].iter().enumerate() {
+        grid.put_str(0, first + 1 + i, line, *style);
+        // Highlights in the message's own lines.
+        if let Some(n) = (styled.len() - shown + i).checked_sub(above.len()) {
+            message_highlights(editor, theme, grid, n, first + 1 + i);
+        }
     }
-    let end = grid.put_str(
-        0,
-        height - 1,
-        "Press ENTER or type command to continue",
-        theme.question,
-    );
+    let end = match &editor.number_prompt {
+        Some(prompt) => grid.put_str(0, height - 1, prompt, Style::default()),
+        None => grid.put_str(
+            0,
+            height - 1,
+            "Press ENTER or type command to continue",
+            theme.question,
+        ),
+    };
     Some((end.min(grid.width() - 1), height - 1))
+}
+
+/// Paint the message's highlights on screen row `y`, which shows its wrapped row `row`.
+fn message_highlights(editor: &Editor, theme: &Theme, grid: &mut Grid, row: usize, y: usize) {
+    if editor.message_highlights.is_empty() {
+        return;
+    }
+    let width = grid.width().max(1);
+    let text = editor.message.as_ref().map_or("", |m| m.text.as_str());
+    // Which line the row is in, and the char it starts at.
+    let mut seen = 0;
+    let mut place = None;
+    for (i, l) in text.lines().enumerate() {
+        let pieces = flux_view::editor::wrap(l, width);
+        if row < seen + pieces.len() {
+            let start: usize = pieces[..row - seen].iter().map(|p| p.chars().count()).sum();
+            place = Some((i, start, pieces[row - seen].clone()));
+            break;
+        }
+        seen += pieces.len();
+    }
+    let Some((line, start, piece)) = place else {
+        return;
+    };
+    for &(l, from, to, group) in &editor.message_highlights {
+        if l != line {
+            continue;
+        }
+        let style = theme.group(group);
+        let mut x = 0;
+        for (i, c) in piece.chars().enumerate() {
+            let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if (from..to).contains(&(start + i)) && x < grid.width() {
+                let cell = grid.cell(x, y).clone();
+                grid.set(x, y, &cell.symbol, cell.width, cell.style.combine(style));
+            }
+            x += w;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -977,11 +1336,5 @@ mod tests {
         let (rows, cursor) = render(&editor);
         assert_eq!(rows[0], format!("<<<{}", "x".repeat(17)));
         assert_eq!(cursor, Some((19, 3)));
-    }
-
-    #[test]
-    fn long_names_keep_their_end() {
-        assert_eq!(truncate_left("src/very/long/path.rs", 10), "<g/path.rs");
-        assert_eq!(truncate_left("short", 10), "short");
     }
 }

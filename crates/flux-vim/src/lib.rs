@@ -2,19 +2,25 @@
 //! and write files.
 
 mod comments;
+mod completion;
 pub mod engine;
 pub mod ex;
 mod ex_lines;
+mod format;
 mod global;
 mod indent;
 mod insert;
 pub mod key;
+pub mod lsp;
 pub mod motion;
 mod normal;
 mod open_line;
 pub mod parse;
+mod prompt;
+mod quickfix;
 mod search;
 mod set;
+mod snippet;
 mod substitute;
 pub mod textobj;
 mod util;

@@ -35,7 +35,7 @@ impl Engine {
             count,
             visual: None,
         };
-        if editor.current_buffer().directory && changes_text(&action) {
+        if editor.current_buffer().nomodifiable() && changes_text(&action) {
             editor.error(flux_view::explorer::NOT_MODIFIABLE);
             self.failed = true;
             return;
@@ -221,6 +221,12 @@ impl Engine {
                 editor.with_window(|w, m| w.scroll_cursor_to(at, m));
             }
             Action::Reselect => self.reselect(editor),
+            Action::Lsp(cmd) => self.lsp_command(editor, cmd, count),
+            Action::ExCount { cmd, count1 } => {
+                let n = count.or(count1.then_some(1));
+                let arg = n.map(|n| format!(" {n}")).unwrap_or_default();
+                crate::ex::run(self, editor, &format!("{cmd}{arg}"));
+            }
             Action::InsertAtLastInsert => {
                 if let Some(p) = editor.current_buffer().marks.get('^') {
                     let line = p.line.min(editor.text().last_line());
@@ -333,6 +339,13 @@ impl Engine {
             }
         };
         let range = op_range(editor, op, cur, t);
+        if matches!(op, Operator::Format | Operator::FormatKeep) {
+            // An exclusive motion ending in column 0 left out its last line (`gq}`).
+            let end_adjusted = range.end.line < cur.line.max(t.pos.line);
+            self.format_op(editor, range, op == Operator::FormatKeep, cur, end_adjusted);
+            editor.window.set_curswant = true;
+            return true;
+        }
         self.apply_operator(editor, op, range, register);
         true
     }
@@ -345,6 +358,7 @@ impl Engine {
         range: Range,
         register: Option<char>,
     ) {
+        let cursor_start = editor.cursor();
         // Vim puts the cursor at the start of the text before operating on it, which is also
         // where undo returns to.
         if op != Operator::Yank {
@@ -364,6 +378,15 @@ impl Engine {
                 self.change_case(editor, range, op)
             }
             Operator::Reindent => self.reindent(editor, range.start.line, range.end.line),
+            Operator::Format | Operator::FormatKeep => {
+                self.format_op(
+                    editor,
+                    range,
+                    op == Operator::FormatKeep,
+                    cursor_start,
+                    false,
+                );
+            }
         }
         // Like Vim, the column to aim for is recomputed from wherever the operator leaves the
         // cursor, at the next vertical move.
