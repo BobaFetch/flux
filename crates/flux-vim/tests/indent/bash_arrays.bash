@@ -1,0 +1,27 @@
+#!/bin/bash
+declare -a fruits=(
+    apple
+    banana
+)
+local_list=(one two three)
+
+names=(
+    alice
+    bob
+)
+
+for n in "${names[@]}"; do
+    echo "$n"
+done
+
+if [[ -n "$x" && $y -gt 1 ]]; then
+    echo "${fruits[0]}"
+fi
+
+f() {
+    local -a items=(
+        x
+        y
+    )
+    echo "${items[@]}"
+}

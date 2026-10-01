@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+deploy() {
+    local target="$1"
+
+    # Check the target.
+    if [ -z "$target" ]; then
+        echo "no target" >&2
+        return 1
+    fi # done checking
+
+    for host in $(cat hosts.txt); do
+        case "$host" in
+            web*)
+                if ping -c1 "$host" >/dev/null; then
+                    ssh "$host" "systemctl restart app" \
+                        || echo "failed: $host"
+                else
+                    echo "down: $host"
+                fi
+                ;;
+            db*) echo "skipping $host" ;;
+        esac
+    done
+
+    select opt in yes no; do
+        echo "$opt"
+        break
+    done
+
+    result=$(
+        echo inner
+    )
+    echo "$result"
+}
+
+# A comment at the top level.
+
+# Another one after a blank line.
+deploy prod
