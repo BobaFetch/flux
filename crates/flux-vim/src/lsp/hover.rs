@@ -16,7 +16,7 @@ pub(crate) fn request(editor: &mut Editor) {
     editor.lsp_request_all(
         "textDocument/hover",
         "hoverProvider",
-        |c, text, buffer, cursor| position_params(c, text, buffer, cursor),
+        position_params,
         Value::Null,
     );
 }
