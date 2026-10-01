@@ -5,6 +5,7 @@ pub mod engine;
 pub mod ex;
 mod ex_lines;
 mod global;
+mod indent;
 mod insert;
 pub mod key;
 pub mod motion;

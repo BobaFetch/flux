@@ -4,6 +4,7 @@ use flux_core::{Edit, chars};
 use flux_view::{Editor, Mode, RegisterKind};
 
 use crate::engine::{CtrlO, Dot, Engine};
+use crate::indent::{self, Typed, When};
 use crate::key::{Key, KeyCode, Modifiers};
 use crate::motion::Want;
 use crate::normal::{normalize_cursor, set_want};
@@ -26,7 +27,7 @@ pub(crate) struct Insert {
     start: Pos,
     /// A line whose indent was added automatically and that nothing has been typed on yet. The
     /// indent is removed again if the line is left empty.
-    ai_line: Option<usize>,
+    pub(crate) ai_line: Option<usize>,
     /// Keys typed, to repeat them for a count.
     typed: Vec<Key>,
     /// The text inserted, for the `".` register.
@@ -123,10 +124,40 @@ impl Engine {
             | KeyCode::Down
             | KeyCode::Home
             | KeyCode::End => self.arrow(editor, key.code),
-            KeyCode::Char(c) if key.mods == Modifiers::NONE => {
-                self.insert_text(editor, &c.to_string())
-            }
+            _ if ctrl('f') => self.ctrl_f(editor),
+            KeyCode::Char(c) if key.mods == Modifiers::NONE => self.insert_char(editor, c),
             _ => {}
+        }
+    }
+
+    /// A typed character, which may reindent the line before or after it goes in
+    /// ('indentkeys').
+    fn insert_char(&mut self, editor: &mut Editor, c: char) {
+        let cindent = indent::cindent_on(editor);
+        let cur = editor.cursor();
+        let white = util::in_indent(&util::line(editor, cur.line), cur.col);
+        let typed = Typed::Char(c);
+        if cindent && indent::in_cinkeys(editor, typed, When::Instead, white) {
+            self.fix_this_line(editor);
+            return;
+        }
+        if cindent && indent::in_cinkeys(editor, typed, When::Before, white) {
+            self.fix_this_line(editor);
+        }
+        self.insert_text(editor, &c.to_string());
+        if cindent && indent::in_cinkeys(editor, typed, When::After, white) {
+            self.fix_this_line(editor);
+        }
+    }
+
+    /// `CTRL-F`: reindent the line when 'indentkeys' has `!^F` (the default).
+    fn ctrl_f(&mut self, editor: &mut Editor) {
+        let cur = editor.cursor();
+        let white = util::in_indent(&util::line(editor, cur.line), cur.col);
+        if indent::cindent_on(editor)
+            && indent::in_cinkeys(editor, Typed::Char('\u{6}'), When::Instead, white)
+        {
+            self.fix_this_line(editor);
         }
     }
 
@@ -171,6 +202,7 @@ impl Engine {
         } else {
             String::new()
         };
+        let old_white = chars.iter().all(|&c| util::is_white(c));
         let ai_only = self.insert.as_ref().and_then(|i| i.ai_line) == Some(cur.line)
             && left.chars().all(util::is_white);
         if ai_only {
@@ -192,6 +224,12 @@ impl Engine {
         if let Some(ins) = self.insert.as_mut() {
             ins.ai_line = (!indent.is_empty()).then_some(cur.line + 1);
             ins.inserted.push('\n');
+        }
+        // The new line's indent comes from the indenter ('indentkeys' `o`).
+        if indent::cindent_on(editor)
+            && indent::in_cinkeys(editor, Typed::OpenBelow, When::After, old_white)
+        {
+            self.fix_this_line(editor);
         }
         set_want(editor, Want::Column);
     }

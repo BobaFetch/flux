@@ -22,19 +22,104 @@ impl Default for FiletypeSettings {
     }
 }
 
-/// The options Neovim's ftplugins set (`nvim --clean` with the filetype's recommended style).
+/// The options Neovim's ftplugins and indent scripts set (`nvim --clean`, each filetype's
+/// recommended style), on top of the global values.
 fn ftplugin(filetype: &str, opts: &mut BufferOptions) {
+    let c_comments = "sO:* -,mO:*  ,exO:*/,s1:/*,mb:*,ex:*/,:///,://";
+    let js_comments = "sO:* -,mO:*  ,exO:*/,s1:/*,mb:*,ex:*/,://";
+    let set = |o: &mut BufferOptions, inde: &str, indk: Option<&str>, com: &str, fo: &str| {
+        o.indentexpr = inde.into();
+        if let Some(k) = indk {
+            o.indentkeys = k.into();
+        }
+        o.comments = com.into();
+        o.formatoptions = fo.into();
+    };
     match filetype {
+        "text" => set(opts, "", None, "fb:-,fb:*,n:>", "tcqj"),
         "rust" => {
             opts.shiftwidth = 4;
             opts.softtabstop = 4;
             opts.expandtab = true;
+            opts.textwidth = 100;
+            opts.cindent = true;
+            opts.cinoptions = "L0,(s,Ws,J1,j1,m1".into();
+            opts.cinkeys = "0{,0},!^F,o,O,0[,0],0(,0)".into();
+            opts.cinwords =
+                "for,if,else,while,loop,impl,mod,unsafe,trait,struct,enum,fn,extern,macro".into();
+            opts.matchpairs = "(:),{:},[:],<:>".into();
+            set(
+                opts,
+                "GetRustIndent(v:lnum)",
+                Some("0{,0},!^F,o,O,0[,0],0(,0)"),
+                "s0:/*!,ex:*/,s1:/*,mb:*,ex:*/,:///,://!,://",
+                "croqnlj",
+            );
         }
-        "python" | "markdown" => {
+        "python" => {
             opts.tabstop = 4;
             opts.shiftwidth = 4;
             opts.softtabstop = 4;
             opts.expandtab = true;
+            set(
+                opts,
+                "python#GetIndent(v:lnum)",
+                Some("0{,0},0),0],:,!^F,o,O,e,<:>,=elif,=except"),
+                "b:#,fb:-",
+                "tcqj",
+            );
+            opts.cinkeys = "0{,0},0),0],:,!^F,o,O,e".into();
+        }
+        "lua" => set(
+            opts,
+            "GetLuaIndent()",
+            Some("0{,0},0),0],:,0#,!^F,o,O,e,0=end,0=until"),
+            ":---,:--",
+            "jcroql",
+        ),
+        "toml" => set(opts, "", None, ":#", "tcqj"),
+        "json" => set(
+            opts,
+            "GetJSONIndent(v:lnum)",
+            Some("0{,0},0),0[,0],!^F,o,O,e"),
+            "",
+            "cqj",
+        ),
+        "markdown" => {
+            opts.tabstop = 4;
+            opts.shiftwidth = 4;
+            opts.softtabstop = 4;
+            opts.expandtab = true;
+            opts.matchpairs = "(:),{:},[:],<:>".into();
+            set(opts, "", None, "fb:*,fb:-,fb:+,n:>", "jtcqln");
+        }
+        "sh" => set(
+            opts,
+            "GetShIndent()",
+            Some(
+                "0{,0},0),0],!^F,o,O,e,0=then,0=do,0=else,0=elif,0=fi,0=esac,0=done,0=end,),\
+                 0=;;,0=;&,0=fin,0=fil,0=fip,0=fir,0=fix",
+            ),
+            "b:#",
+            "jcroql",
+        ),
+        "javascript" | "javascriptreact" => set(
+            opts,
+            "GetJavascriptIndent()",
+            Some("0{,0},0),0],:,0#,!^F,o,O,e,0],0)"),
+            js_comments,
+            "jcroql",
+        ),
+        "typescript" | "typescriptreact" => set(
+            opts,
+            "GetTypescriptIndent()",
+            Some("0{,0},0),0],0,,!^F,o,O,e"),
+            js_comments,
+            "jcroql",
+        ),
+        "c" | "cpp" => {
+            opts.cindent = true;
+            set(opts, "", None, c_comments, "jcroql");
         }
         _ => {}
     }

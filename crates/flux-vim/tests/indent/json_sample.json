@@ -1,0 +1,9 @@
+{
+  "name": "flux",
+  "version": 1,
+  "ratio": 1.5e3,
+  "enabled": true,
+  "missing": null,
+  "tags": ["editor", "vim"],
+  "nested": { "escape": "a\"b\n" }
+}

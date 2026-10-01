@@ -18,6 +18,8 @@ pub enum Operator {
     Lowercase,
     Uppercase,
     ToggleCase,
+    /// `=`: reindent lines.
+    Reindent,
 }
 
 impl Operator {
@@ -307,6 +309,7 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
             'y' => operator(k, Operator::Yank, 'y', &mut count)?,
             '>' => operator(k, Operator::ShiftRight, '>', &mut count)?,
             '<' => operator(k, Operator::ShiftLeft, '<', &mut count)?,
+            '=' => operator(k, Operator::Reindent, '=', &mut count)?,
             'x' => Some(Action::Operate(
                 Operator::Delete,
                 OpTarget::Motion(Motion::Right),
@@ -722,6 +725,7 @@ fn parse_visual_command(k: &mut Keys) -> Result<ParsedVisual, NeedMore> {
             'y' => Some(V::Operate(Operator::Yank)),
             '>' => Some(V::Operate(Operator::ShiftRight)),
             '<' => Some(V::Operate(Operator::ShiftLeft)),
+            '=' => Some(V::Operate(Operator::Reindent)),
             '~' => Some(V::Operate(Operator::ToggleCase)),
             'u' => Some(V::Operate(Operator::Lowercase)),
             'U' => Some(V::Operate(Operator::Uppercase)),

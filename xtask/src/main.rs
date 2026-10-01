@@ -8,6 +8,7 @@ use std::{env, fs};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+mod indent;
 mod screens;
 
 fn main() -> Result<()> {
@@ -19,8 +20,10 @@ fn main() -> Result<()> {
         ["colors", "gen"] => colors_gen(),
         ["colors", "check"] => colors_check(),
         ["screens"] => screens::screens(),
+        ["indent", "gen"] => indent::gen_expected(),
+        ["indent", "check"] => indent::check(),
         _ => bail!(
-            "usage: cargo xtask oracle gen    # rewrite expected.json from Neovim\n       cargo xtask oracle check  # verify expected.json still matches Neovim\n       cargo xtask colors gen    # rewrite flux's default colors from Neovim's\n       cargo xtask colors check  # verify they still match Neovim's\n       cargo xtask screens       # compare highlighted screens with Neovim's (needs tmux)"
+            "usage: cargo xtask oracle gen    # rewrite expected.json from Neovim\n       cargo xtask oracle check  # verify expected.json still matches Neovim\n       cargo xtask colors gen    # rewrite flux's default colors from Neovim's\n       cargo xtask colors check  # verify they still match Neovim's\n       cargo xtask screens       # compare highlighted screens with Neovim's (needs tmux)\n       cargo xtask indent gen    # rewrite the indent corpus expectations from Neovim\n       cargo xtask indent check  # verify they still match Neovim"
         ),
     }
 }

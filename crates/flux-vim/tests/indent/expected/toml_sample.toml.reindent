@@ -1,0 +1,16 @@
+# A sample for comparing highlights.
+[package]
+name = "flux"
+version = "0.0.1"
+edition = 2024
+authors = ["A <a@example.com>"]
+
+[dependencies]
+regex = { version = "1.12", features = ["std"] }
+tokio.workspace = true
+
+[[bin]]
+name = "flux"
+enabled = true
+ratio = 1.5
+when = 1979-05-27T07:32:00Z

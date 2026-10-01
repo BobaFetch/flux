@@ -1,0 +1,25 @@
+// A sample for comparing highlights.
+interface Shape {
+  readonly name: string;
+  area(): number;
+}
+
+type Id = string | number;
+
+enum Color { Red, Green = "green" }
+
+export class Circle implements Shape {
+  public readonly name = "circle";
+  constructor(private r: number) {}
+  area(): number {
+    return Math.PI * this.r ** 2;
+  }
+}
+
+function first<T>(items: T[]): T | undefined {
+  return items.length > 0 ? items[0] : undefined;
+}
+
+const ids: Array<Id> = [1, "two"];
+let c = new Circle(2) as Shape;
+console.log(first(ids), c.area(), Color.Red, null!);

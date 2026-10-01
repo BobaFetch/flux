@@ -30,7 +30,10 @@ pub fn detect(path: &Path, first_line: &str) -> Option<&'static str> {
         "jsx" => Some("javascriptreact"),
         "ts" | "mts" | "cts" => Some("typescript"),
         "tsx" => Some("typescriptreact"),
-        "c" | "h" => Some("c"),
+        "c" => Some("c"),
+        // Neovim 0.12 takes `.h` files to be C++ (`g:c_syntax_for_h` makes them C).
+        "h" | "hh" | "hpp" | "cpp" | "cc" | "cxx" => Some("cpp"),
+        "txt" | "text" => Some("text"),
         _ => None,
     });
     by_ext.or_else(|| from_shebang(first_line))
@@ -96,7 +99,9 @@ mod tests {
         assert_eq!(d("README.md", ""), Some("markdown"));
         assert_eq!(d("script", "#!/usr/bin/env python3"), Some("python"));
         assert_eq!(d("run", "#!/bin/bash -e"), Some("sh"));
-        assert_eq!(d("notes.txt", ""), None);
+        assert_eq!(d("notes.txt", ""), Some("text"));
+        assert_eq!(d("x.h", ""), Some("cpp"));
+        assert_eq!(d("notes", ""), None);
         assert_eq!(d("Makefile", ""), None);
     }
 

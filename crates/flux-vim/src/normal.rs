@@ -5,6 +5,7 @@ use flux_view::{Editor, Mode, Register, RegisterKind};
 
 use crate::engine::{Dot, Engine};
 use crate::ex;
+use crate::indent::{self, Typed, When};
 use crate::insert::InsertKind;
 use crate::motion::{self, Context, Kind, Motion, Pending, Target, Want};
 use crate::parse::{Action, Command, InsertAt, OpTarget, Operator, Scroll};
@@ -363,6 +364,7 @@ impl Engine {
             Operator::Lowercase | Operator::Uppercase | Operator::ToggleCase => {
                 self.change_case(editor, range, op)
             }
+            Operator::Reindent => self.reindent(editor, range.start.line, range.end.line),
         }
         // Like Vim, the column to aim for is recomputed from wherever the operator leaves the
         // cursor, at the next vertical move.
@@ -740,6 +742,18 @@ impl Engine {
             }
         };
         self.begin_insert(editor, InsertKind::Plain(at), count, ai_line);
+        // The new line's indent comes from the indenter ('indentkeys' `o` and `O`).
+        let open = match at {
+            InsertAt::OpenBelow => Some(Typed::OpenBelow),
+            InsertAt::OpenAbove => Some(Typed::OpenAbove),
+            _ => None,
+        };
+        if let Some(typed) = open
+            && indent::cindent_on(editor)
+            && indent::in_cinkeys(editor, typed, When::After, util::in_indent(&s, cur.col))
+        {
+            self.fix_this_line(editor);
+        }
     }
 
     /// Open a new line below or above the cursor with the current line's indent, put the cursor
@@ -768,8 +782,6 @@ impl Engine {
     }
 }
 
-/// Work out the text an operator covers, applying Vim's adjustments for exclusive motions
-/// (`:h exclusive-linewise`) and for deletes that end at the end of a line.
 /// The command changes the buffer's text (refused in a directory listing).
 fn changes_text(action: &Action) -> bool {
     match action {
@@ -785,6 +797,8 @@ fn changes_text(action: &Action) -> bool {
     }
 }
 
+/// Work out the text an operator covers, applying Vim's adjustments for exclusive motions
+/// (`:h exclusive-linewise`) and for deletes that end at the end of a line.
 fn op_range(editor: &Editor, op: Operator, cur: Pos, t: Target) -> Range {
     op_range_between(editor, op, cur, t.pos, t.kind, t.numbered_register, false)
 }

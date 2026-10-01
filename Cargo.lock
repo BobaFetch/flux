@@ -201,6 +201,7 @@ name = "flux-vim"
 version = "0.0.1"
 dependencies = [
  "flux-core",
+ "flux-syntax",
  "flux-view",
  "serde_json",
  "unicode-width",

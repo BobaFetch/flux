@@ -12,7 +12,25 @@ pub struct BufferOptions {
     pub filetype: String,
     /// 'matchpairs': the brackets MatchParen (and `%`) pair up, as `(:),{:},[:]`.
     pub matchpairs: String,
+    /// 'indentexpr': which of flux's indenters (named as Neovim's ftplugins name their
+    /// functions, see `flux_vim::indent`) indents the buffer. Empty for none.
+    pub indentexpr: String,
+    /// 'indentkeys' (with 'indentexpr') and 'cinkeys' (without): keys that reindent the line.
+    pub indentkeys: String,
+    pub cinkeys: String,
+    /// 'cindent' and its 'cinoptions' and 'cinwords'.
+    pub cindent: bool,
+    pub cinoptions: String,
+    pub cinwords: String,
+    /// 'comments', 'formatoptions' and 'textwidth': comment leaders, and how text is
+    /// formatted while typing.
+    pub comments: String,
+    pub formatoptions: String,
+    pub textwidth: usize,
 }
+
+/// The default 'cinkeys' and 'indentkeys'.
+pub const DEFAULT_CINKEYS: &str = "0{,0},0),0],:,0#,!^F,o,O,e";
 
 impl Default for BufferOptions {
     fn default() -> Self {
@@ -24,6 +42,15 @@ impl Default for BufferOptions {
             autoindent: true,
             filetype: String::new(),
             matchpairs: "(:),{:},[:]".into(),
+            indentexpr: String::new(),
+            indentkeys: DEFAULT_CINKEYS.into(),
+            cinkeys: DEFAULT_CINKEYS.into(),
+            cindent: false,
+            cinoptions: String::new(),
+            cinwords: "if,else,while,do,for,switch".into(),
+            comments: "s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-".into(),
+            formatoptions: "tcqj".into(),
+            textwidth: 0,
         }
     }
 }
@@ -147,13 +174,21 @@ const fn def(name: &'static str, short: &'static str, kind: Kind, scope: Scope) 
 pub const OPTIONS: &[OptionDef] = &[
     def("autoindent", "ai", Kind::Bool, Scope::Buffer),
     def("background", "bg", Kind::String, Scope::Global),
+    def("cindent", "cin", Kind::Bool, Scope::Buffer),
+    def("cinkeys", "cink", Kind::String, Scope::Buffer),
+    def("cinoptions", "cino", Kind::String, Scope::Buffer),
+    def("cinwords", "cinw", Kind::String, Scope::Buffer),
+    def("comments", "com", Kind::String, Scope::Buffer),
     def("expandtab", "et", Kind::Bool, Scope::Buffer),
     def("filetype", "ft", Kind::String, Scope::Buffer),
+    def("formatoptions", "fo", Kind::String, Scope::Buffer),
     def("gdefault", "gd", Kind::Bool, Scope::Global),
     def("hidden", "hid", Kind::Bool, Scope::Global),
     def("hlsearch", "hls", Kind::Bool, Scope::Global),
     def("ignorecase", "ic", Kind::Bool, Scope::Global),
     def("incsearch", "is", Kind::Bool, Scope::Global),
+    def("indentexpr", "inde", Kind::String, Scope::Buffer),
+    def("indentkeys", "indk", Kind::String, Scope::Buffer),
     def("matchpairs", "mps", Kind::String, Scope::Buffer),
     def("number", "nu", Kind::Bool, Scope::Window),
     def("numberwidth", "nuw", Kind::Number, Scope::Window),
@@ -167,6 +202,7 @@ pub const OPTIONS: &[OptionDef] = &[
     def("splitright", "spr", Kind::Bool, Scope::Global),
     def("tabstop", "ts", Kind::Number, Scope::Buffer),
     def("termguicolors", "tgc", Kind::Bool, Scope::Global),
+    def("textwidth", "tw", Kind::Number, Scope::Buffer),
     def("wrapscan", "ws", Kind::Bool, Scope::Global),
 ];
 
@@ -240,6 +276,15 @@ impl BufferOptions {
             "autoindent" => Value::Bool(self.autoindent),
             "filetype" => Value::String(self.filetype.clone()),
             "matchpairs" => Value::String(self.matchpairs.clone()),
+            "indentexpr" => Value::String(self.indentexpr.clone()),
+            "indentkeys" => Value::String(self.indentkeys.clone()),
+            "cinkeys" => Value::String(self.cinkeys.clone()),
+            "cindent" => Value::Bool(self.cindent),
+            "cinoptions" => Value::String(self.cinoptions.clone()),
+            "cinwords" => Value::String(self.cinwords.clone()),
+            "comments" => Value::String(self.comments.clone()),
+            "formatoptions" => Value::String(self.formatoptions.clone()),
+            "textwidth" => Value::Number(self.textwidth as i64),
             _ => return None,
         })
     }
@@ -253,6 +298,15 @@ impl BufferOptions {
             ("autoindent", Value::Bool(x)) => self.autoindent = x,
             ("filetype", Value::String(x)) => self.filetype = x,
             ("matchpairs", Value::String(x)) => self.matchpairs = x,
+            ("indentexpr", Value::String(x)) => self.indentexpr = x,
+            ("indentkeys", Value::String(x)) => self.indentkeys = x,
+            ("cinkeys", Value::String(x)) => self.cinkeys = x,
+            ("cindent", Value::Bool(x)) => self.cindent = x,
+            ("cinoptions", Value::String(x)) => self.cinoptions = x,
+            ("cinwords", Value::String(x)) => self.cinwords = x,
+            ("comments", Value::String(x)) => self.comments = x,
+            ("formatoptions", Value::String(x)) => self.formatoptions = x,
+            ("textwidth", Value::Number(x)) => self.textwidth = x.max(0) as usize,
             _ => {}
         }
     }
