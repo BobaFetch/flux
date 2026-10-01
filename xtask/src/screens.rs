@@ -229,7 +229,12 @@ fn capture(cmd: &str, dir: &Path, truecolor: bool, keys: &str) -> Result<Screen>
                 tmux(&args)?;
             }
             None => {
-                tmux(&["send-keys", "-t", &session, "-l", line])?;
+                // tmux takes a `;` ending an argument as the end of its command.
+                let literal = match line.strip_suffix(';') {
+                    Some(rest) => format!("{rest}\\;"),
+                    None => line.to_string(),
+                };
+                tmux(&["send-keys", "-t", &session, "-l", &literal])?;
             }
         }
         sleep(Duration::from_millis(300));

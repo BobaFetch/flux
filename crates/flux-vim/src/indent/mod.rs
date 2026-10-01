@@ -79,21 +79,6 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// A context for tests: `text` with `opts`, no syntax.
-    #[cfg(test)]
-    pub fn for_test(text: &'a Text, opts: &'a BufferOptions, lnum: usize) -> Self {
-        Self {
-            text,
-            opts,
-            lnum,
-            col: 0,
-            insert: false,
-            on_cursor_line: false,
-            syntax: None,
-            spans: RefCell::default(),
-        }
-    }
-
     /// The cursor's byte column when indenting the cursor line in Insert mode.
     pub fn cursor_col(&self) -> Option<usize> {
         (self.insert && self.on_cursor_line).then_some(self.col)

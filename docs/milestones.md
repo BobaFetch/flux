@@ -273,7 +273,92 @@ no tree view. Fuzzy file finding is still M7.
 3. `:Vex`, then `o` on a file; `v` on another.
 4. `dd`, `x`, `i`, `p` in a listing give E21; `:w` gives E502.
 
-## M5: Syntax highlighting
+## M5: Syntax highlighting, indenting, filetypes ✅ (awaiting manual check)
+
+- Tree-sitter highlighting (new `flux-syntax` crate) for Rust, C, Lua, Python, JavaScript (with
+  JSX), TypeScript, TSX, JSON, TOML, Bash and Markdown, with the queries Neovim uses (its own
+  for C, Lua and Markdown; nvim-treesitter's for the rest, vendored with a NOTICE). Neovim's
+  query extensions work: `#lua-match?`, `#contains?`, `#has-ancestor?`, `#has-parent?`,
+  `#kind-eq?`, `#set!` (priority, capture values), `#offset!`. Injections are highlighted too:
+  Markdown's inline text and fenced code, Rust macro arguments, regexes and so on.
+- Parsing is incremental: `Text` logs its edits in bytes for tree-sitter. A parse gets 20 ms
+  per frame and resumes between keys, so a big file opens at once and an unclosed bracket
+  doesn't freeze typing; meanwhile the old tree, moved along with the edits, keeps the colors
+  roughly in place.
+- Neovim's default colorscheme, generated from Neovim (`cargo xtask colors gen`), for
+  'background' dark and light, in 24-bit color ('termguicolors', on when `$COLORTERM` says so,
+  as in Neovim) or 16 colors. Every screen element now uses its Neovim highlight group
+  (Normal's background, StatusLine, LineNr, NonText, SpecialKey, Visual, Search, CurSearch,
+  IncSearch, Substitute, ErrorMsg, ModeMsg, MoreMsg, Question, Directory, …), and Visual mode
+  is drawn like Neovim's (the cell under the cursor and line breaks aren't highlighted). Links
+  in Markdown are OSC 8 hyperlinks, as Neovim makes them.
+- MatchParen, like Neovim's matchparen plugin: the bracket under (or, in Insert mode, before)
+  the cursor and its match within the window, skipping brackets in strings and comments.
+- Filetype detection (extensions, file names, `#!` lines), `'filetype'`, `:set ft=`, and what
+  Neovim's ftplugins and indent scripts set per filetype: 'tabstop' 'shiftwidth'
+  'softtabstop' 'expandtab' 'textwidth' 'matchpairs' 'comments' 'formatoptions'
+  'indentexpr' 'indentkeys' 'cindent' 'cinoptions' 'cinkeys' 'cinwords'. `:filetype [plugin]
+  [indent] on|off|detect`, `:syntax on|off`.
+- Indenting like Neovim: Vim's C indenter (cindent, with 'cinoptions') and ports of Neovim's
+  indent scripts for Rust, Python, Lua, sh, JavaScript, TypeScript and JSON. Lines are
+  reindented on `<CR>`, `o`, `O`, `CTRL-F` and the keys in 'indentkeys' (`}`, `else`, `end`,
+  `:` …), and with the `=` operator (`==`, `=ip`, `gg=G`, Visual `=`).
+- Comments: `<CR>`, `o` and `O` continue the comment leader ('formatoptions' `r` and `o`, Vim's
+  `open_line`), including three-part comments (`/*`, ` * `, ` */`, typing `/` to end one), a `//`
+  comment after code, and the offsets and flags in 'comments'. `J` removes leaders
+  ('formatoptions' `j`). Typing past 'textwidth' wraps comments (`c`) and text (`t`) at the last
+  blank, continuing the leader; `l` keeps long lines. An automatic indent or leader that
+  nothing was typed after loses its trailing blanks on `<Esc>`.
+
+Verified:
+- All 1109 M0–M5 oracle cases match Neovim 0.12.5 (39 new: comment leaders, `fo-j`, auto-wrap,
+  `x`-ended comments).
+- The new indent corpus (62 files, from small topic files to a 969-line flux source file) gives
+  Neovim's results both reindented with `gg=G` and typed line by line: 124 of 124
+  (`cargo xtask indent gen|check`).
+- `cargo xtask screens` (new) opens 26 files in Neovim and flux side by side in tmux and compares
+  every cell's character, colors, attributes and hyperlink, and the cursor: all identical, in
+  24-bit and in 16 colors. Neovim gets flux's parsers (built from the same grammar crates) and
+  queries, so every language is compared, not just the ones Neovim ships.
+- In a 200,000-line Rust file (release build): the first parse takes 0.56 s (in the
+  background), typing code takes 8 ms a key on average (worst 23 ms), `=` 0.26 ms a line.
+
+### Manual check
+
+1. Open a few files of different languages (`flux crates/flux-view/src/editor.rs`, a Python
+   script, a README): colors and background look like `nvim --clean` on the same file (Neovim
+   only uses tree-sitter for Lua and Markdown by default; for the others compare the general
+   look). A Markdown file shows code blocks highlighted and links you can click.
+2. Type a Rust function from scratch: `fn main() {<CR>`, a `vec![` over several lines, `}`;
+   indents follow, and `}` / `]` snap back. Do the same in Python (`if x:`, `else:`), Lua
+   (`function … end`) and a shell script (`if …; then … fi`).
+3. `gg=G` on a badly indented file; `=ip`; `==`.
+4. In Rust: `// comment<CR>` continues the comment; `o` on a comment line does too; type a
+   long comment past column 100 and it wraps. `/*<CR>` in C gives ` * `; typing `/` on the
+   next line ends it. `J` on two comment lines drops the second `//`.
+5. Put the cursor on a bracket: it and its match light up; move into Insert mode after a `)`.
+6. `:set bg=light`, `:set notgc`, `:syntax off` / `on`, `:set ft=python` on a `.txt` buffer,
+   `:filetype`.
+7. Open a very large file: it shows at once, colors follow shortly.
+
+Known gaps:
+- Highlighting is tree-sitter for every filetype, while `nvim --clean` uses Vim's regex
+  syntax files except for Lua and Markdown, so colors of other languages match Neovim with
+  tree-sitter (nvim-treesitter's queries), not `nvim --clean` exactly. Indenting, which in
+  Neovim asks the regex syntax about strings and comments, asks the tree-sitter tree instead;
+  the corpus shows no difference, but unusual code may.
+- No `'background'` detection (Neovim asks the terminal): set `:set bg=light` for a light
+  terminal. `:syntax off` turns off all highlighting (in Neovim it leaves tree-sitter
+  highlighting alone). Only `default` colors; `:colorscheme` and `:highlight` come with the
+  Lua config (M7). `.h` files are C++ (as in Neovim 0.12), for which flux has no parser.
+- Not ported: 'smartindent', 'lisp', `gq` and 'formatexpr', numbered lists ('formatoptions'
+  `n`), Vim's `b:js_cache`, and tree-sitter's indent queries. `gc` (Neovim's commenting) isn't
+  there yet.
+- Found by the new screen comparison, from earlier milestones: in Visual mode Neovim lets the
+  cursor go past the last character (`v$`, `l` at the end of a line); flux keeps it on the
+  last character, so the cursor and ruler differ there (what operators do is the same).
+  `:resize` in a window that has only vertical splits makes Neovim give the room to the
+  command line; flux doesn't.
 
 ## M6: LSP
 
