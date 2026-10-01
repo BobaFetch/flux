@@ -13,6 +13,7 @@ pub mod matchparen;
 pub mod options;
 pub mod registers;
 pub mod search;
+pub mod semantic_tokens;
 pub mod window;
 
 pub use buffer::{Buffer, BufferId};

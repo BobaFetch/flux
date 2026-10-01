@@ -115,7 +115,8 @@ fn apply_style(out: &mut impl Write, style: Style) -> io::Result<()> {
         SetForegroundColor(term_color(style.fg)),
         SetBackgroundColor(term_color(style.bg)),
     )?;
-    if style.sp != Color::Reset {
+    // Like Neovim's TUI, the underline color goes out only with an underline.
+    if style.sp != Color::Reset && (style.underline || style.undercurl) {
         queue!(out, SetUnderlineColor(term_color(style.sp)))?;
     }
     for (on, attribute) in [

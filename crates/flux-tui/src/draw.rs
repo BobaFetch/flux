@@ -144,6 +144,7 @@ impl Pane<'_> {
         let mut line = win.top;
         let shown_lines = win.top..(win.top + text_rows).min(text.line_count());
         let matches = self.search_matches(shown_lines.clone());
+        let semantic = self.semantic_tokens(shown_lines.clone());
         let syntax = self.syntax_spans(shown_lines);
         while row < text_rows && line < text.line_count() {
             let mut layout = layout_line(
@@ -212,6 +213,21 @@ impl Pane<'_> {
                 }
                 if span.url.is_some() {
                     at.link(grid, (span.start, span.end), &span.url);
+                }
+            }
+            // LSP semantic tokens (priorities 125–127, over tree-sitter's 100).
+            for (s, e, group, _) in semantic
+                .iter()
+                .filter(|h| h.0.line <= line && line <= h.1.line)
+            {
+                let from = if s.line == line { s.col } else { 0 };
+                let to = if e.line == line {
+                    e.col
+                } else {
+                    text.line_len(line)
+                };
+                if from < to {
+                    at.paint(grid, (from, to), self.theme.group(group), false);
                 }
             }
             // A hover float's range (LspReferenceTarget).
@@ -406,6 +422,23 @@ impl Pane<'_> {
             Some(syntax) => syntax.highlights(&buffer.text, lines),
             None => Vec::new(),
         }
+    }
+
+    /// The semantic token highlights on `lines`, in paint order (none while `:s` previews a
+    /// change).
+    fn semantic_tokens(
+        &self,
+        lines: std::ops::Range<usize>,
+    ) -> Vec<(flux_view::Cursor, flux_view::Cursor, &str, u8)> {
+        let editor = self.editor;
+        let previewed = self.win.buffer == editor.window.buffer
+            && editor.preview.as_ref().is_some_and(|p| p.changed);
+        if previewed {
+            return Vec::new();
+        }
+        let mut out = editor.semantic_token_highlights(self.win.buffer);
+        out.retain(|(s, e, _, _)| s.line < lines.end && e.line >= lines.start);
+        out
     }
 
     /// The selected chars of `line` as `[from, to)` ranges, drawn the way Neovim draws them:

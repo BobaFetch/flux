@@ -86,6 +86,7 @@ async fn run(mut editor: Editor) -> Result<()> {
         // Parsing gets a slice of each frame; a long one goes on between keys.
         let parsing = editor.update_syntax_within(Some(PARSE_SLICE));
         editor.fit_floats();
+        editor.semantic_tokens_update(std::time::Instant::now());
         editor.update_matchparen();
         let (width, height) = editor.screen_size();
         let same_size = |g: &Grid| g.width() == width && g.height() == height;
@@ -146,6 +147,12 @@ async fn run(mut editor: Editor) -> Result<()> {
         last_grid = Some(grid);
 
         servers.flush(&mut editor);
+        // A debounced semantic tokens request to send.
+        let wake = editor
+            .lsp
+            .semantic_tokens
+            .deadline()
+            .map(tokio::time::Instant::from_std);
         let batch = tokio::select! {
             biased;
             batch = events.next() => batch,
@@ -159,6 +166,7 @@ async fn run(mut editor: Editor) -> Result<()> {
             }
             // No key yet: parse some more.
             () = std::future::ready(()), if parsing => continue,
+            () = async { tokio::time::sleep_until(wake.expect("checked")).await }, if wake.is_some() => continue,
         };
         let Some(batch) = batch else {
             break;

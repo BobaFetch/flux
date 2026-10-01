@@ -102,10 +102,13 @@ fn server_request(editor: &mut Editor, client: ClientId, method: &str, id: Value
             let applied = apply_workspace_edit(editor, client, &params["edit"]);
             Ok(json!({ "applied": applied }))
         }
+        "workspace/semanticTokens/refresh" => {
+            editor.semantic_tokens_refresh(client, std::time::Instant::now());
+            Ok(Value::Null)
+        }
         "window/workDoneProgress/create"
         | "client/registerCapability"
         | "client/unregisterCapability"
-        | "workspace/semanticTokens/refresh"
         | "workspace/inlayHint/refresh"
         | "workspace/codeLens/refresh"
         | "workspace/diagnostic/refresh"
@@ -147,6 +150,11 @@ fn notification(editor: &mut Editor, client: ClientId, method: &str, params: &Va
 }
 
 fn response_error(editor: &mut Editor, client: ClientId, pending: &Pending, error: &Value) {
+    // Neovim only logs these.
+    if pending.method.starts_with("textDocument/semanticTokens/") {
+        editor.semantic_tokens_response(client, pending, None);
+        return;
+    }
     // A cancelled request (the document changed) isn't worth a message.
     if matches!(error["code"].as_i64(), Some(-32800 | -32801)) {
         return;
@@ -169,6 +177,9 @@ fn response(
     let _ = engine;
     match pending.method.as_str() {
         "initialize" => editor.lsp_initialized(client, result),
+        m if m.starts_with("textDocument/semanticTokens/") => {
+            editor.semantic_tokens_response(client, &pending, Some(result));
+        }
         "shutdown" => {
             editor.lsp.notify(client, "exit", Value::Null);
             editor.lsp.outbox.push(Outgoing::Kill { client });

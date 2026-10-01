@@ -151,7 +151,11 @@ pub type Placed = (Revision, (usize, usize), (usize, usize));
 /// Move point `p` (line, byte column) through `edit`, like an extmark: a point in deleted text
 /// goes to where the deletion was; text inserted at the point pushes it along with
 /// `right_gravity`.
-fn follow_edit(p: (usize, usize), e: &flux_core::ByteEdit, right_gravity: bool) -> (usize, usize) {
+pub(crate) fn follow_edit(
+    p: (usize, usize),
+    e: &flux_core::ByteEdit,
+    right_gravity: bool,
+) -> (usize, usize) {
     let start = (e.start.row, e.start.col);
     let old_end = (e.old_end.row, e.old_end.col);
     let new_end = (e.new_end.row, e.new_end.col);
@@ -198,6 +202,8 @@ pub struct LspState {
     pub diagnostics: HashMap<String, Vec<Diagnostic>>,
     /// Diagnostics that arrived in Insert mode, shown when it ends ('update_in_insert' off).
     pub held_diagnostics: HashMap<String, Vec<Diagnostic>>,
+    /// Semantic token highlights (`crate::semantic_tokens`).
+    pub semantic_tokens: crate::semantic_tokens::SemanticTokens,
 }
 
 /// The `file://` URI of `path`, percent-encoded like Neovim's `vim.uri_from_fname`.
@@ -308,6 +314,25 @@ fn client_capabilities() -> Value {
             "typeDefinition": { "linkSupport": true },
             "implementation": { "linkSupport": true },
             "references": { "dynamicRegistration": false },
+            "semanticTokens": {
+                "dynamicRegistration": false,
+                "tokenTypes": [
+                    "namespace", "type", "class", "enum", "interface", "struct", "typeParameter",
+                    "parameter", "variable", "property", "enumMember", "event", "function",
+                    "method", "macro", "keyword", "modifier", "comment", "string", "number",
+                    "regexp", "operator", "decorator"
+                ],
+                "tokenModifiers": [
+                    "declaration", "definition", "readonly", "static", "deprecated", "abstract",
+                    "async", "modification", "documentation", "defaultLibrary"
+                ],
+                "formats": ["relative"],
+                "requests": { "range": true, "full": { "delta": true } },
+                "overlappingTokenSupport": true,
+                "multilineTokenSupport": true,
+                "serverCancelSupport": false,
+                "augmentsSyntaxTokens": true
+            },
             "documentSymbol": {
                 "dynamicRegistration": false,
                 "hierarchicalDocumentSymbolSupport": true,
@@ -323,6 +348,7 @@ fn client_capabilities() -> Value {
             "applyEdit": true,
             "configuration": true,
             "workspaceFolders": true,
+            "semanticTokens": { "refreshSupport": true },
             "workspaceEdit": { "resourceOperations": ["rename", "create", "delete"] }
         }
     })
