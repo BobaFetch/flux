@@ -62,6 +62,9 @@ pub struct Theme {
     pub diagnostic_underline: [Style; 4],
     /// Tree-sitter captures looked up so far (`keyword.function` → `@keyword.function`).
     captures: RefCell<HashMap<&'static str, Style>>,
+    /// Other groups looked up so far.
+    groups: RefCell<HashMap<String, Style>>,
+    pub normal_float: Style,
 }
 
 impl Theme {
@@ -102,7 +105,18 @@ impl Theme {
             diagnostic_underline: ["Error", "Warn", "Info", "Hint"]
                 .map(|s| relative(g(&format!("DiagnosticUnderline{s}")))),
             captures: RefCell::default(),
+            groups: RefCell::default(),
+            normal_float: g("NormalFloat"),
         }
+    }
+
+    /// The style of highlight group `name`.
+    pub fn group(&self, name: &str) -> Style {
+        *self
+            .groups
+            .borrow_mut()
+            .entry(name.to_string())
+            .or_insert_with(|| style(highlight::resolve(name, self.light, self.gui)))
     }
 
     /// The style of tree-sitter capture `name`.

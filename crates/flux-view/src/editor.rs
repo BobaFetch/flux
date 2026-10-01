@@ -126,6 +126,8 @@ pub struct Editor {
     pub matchparen: Option<[Cursor; 2]>,
     /// Language servers (see [`crate::lsp`]).
     pub lsp: crate::lsp::LspState,
+    /// Floating windows (hover, diagnostics), drawn over the others.
+    pub floats: Vec<crate::float::Float>,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
@@ -217,6 +219,7 @@ impl Editor {
             filetype: Default::default(),
             matchparen: None,
             lsp: Default::default(),
+            floats: Vec::new(),
             registers: Registers::default(),
             hit_enter: false,
             more_top: None,

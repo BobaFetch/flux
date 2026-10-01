@@ -141,6 +141,8 @@ impl Engine {
     /// A typed character, which may reindent the line before or after it goes in
     /// ('indentkeys').
     fn insert_char(&mut self, editor: &mut Editor, c: char) {
+        // Floats close when a character is typed (Neovim's InsertCharPre).
+        editor.close_floats();
         let cindent = indent::cindent_on(editor);
         let cur = editor.cursor();
         let white = util::in_indent(&util::line(editor, cur.line), cur.col);

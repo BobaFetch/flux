@@ -15,6 +15,7 @@ impl Engine {
             LspCmd::DiagnosticPrev => diagnostic_jump(editor, -n, true),
             LspCmd::DiagnosticLast => diagnostic_jump(editor, isize::MAX, false),
             LspCmd::DiagnosticFirst => diagnostic_jump(editor, -isize::MAX, false),
+            LspCmd::DiagnosticFloat => diagnostic_float(editor),
             _ => {}
         }
     }
@@ -93,4 +94,58 @@ fn diagnostic_jump(editor: &mut Editor, mut count: isize, wrap: bool) {
         }
         None => editor.warning("No more valid diagnostics to move to"),
     }
+}
+
+/// `CTRL-W d`: Neovim's `vim.diagnostic.open_float()` for the cursor line: a `Diagnostics:`
+/// header, then each diagnostic numbered, in its severity's color, with its code.
+fn diagnostic_float(editor: &mut Editor) {
+    use flux_view::float::FloatHighlight;
+    if editor.floats.iter().any(|f| f.focus_id == "line") {
+        return;
+    }
+    let line = editor.cursor().line;
+    let buffer = editor.window.buffer;
+    let on_line: Vec<(u8, String, Option<String>)> = editor
+        .buffer_diagnostics(buffer)
+        .into_iter()
+        .filter(|(s, e, _)| {
+            line >= s.line && line <= e.line && (s.line == e.line || line != e.line || e.col != 0)
+        })
+        .map(|(_, _, d)| (d.severity, d.message.clone(), d.code.clone()))
+        .collect();
+    if on_line.is_empty() {
+        return;
+    }
+    let mut lines = vec!["Diagnostics:".to_string()];
+    let mut highlights = Vec::new();
+    for (i, (severity, message, code)) in on_line.iter().enumerate() {
+        let prefix = format!("{}. ", i + 1);
+        let suffix = code.as_ref().map(|c| format!(" [{c}]")).unwrap_or_default();
+        let group = ["Error", "Warn", "Info", "Hint"][usize::from(severity - 1)];
+        let message_lines: Vec<&str> = message.split('\n').collect();
+        for (j, m) in message_lines.iter().enumerate() {
+            let pre = if j == 0 {
+                prefix.clone()
+            } else {
+                " ".repeat(prefix.len())
+            };
+            let suf = if j + 1 == message_lines.len() {
+                suffix.as_str()
+            } else {
+                ""
+            };
+            let n = lines.len();
+            // The prefix has its own highlight on the first line only.
+            let a = if j == 0 { pre.chars().count() } else { 0 };
+            let b = pre.chars().count() + m.chars().count();
+            highlights.push(FloatHighlight {
+                line: n,
+                start: a,
+                end: b,
+                group: format!("DiagnosticFloating{group}"),
+            });
+            lines.push(format!("{pre}{m}{suf}"));
+        }
+    }
+    editor.open_float(lines, None, highlights, "line");
 }

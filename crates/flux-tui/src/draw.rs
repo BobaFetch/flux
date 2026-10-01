@@ -37,6 +37,9 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
             pane.draw_separator(grid);
         }
     }
+    for float in &editor.floats {
+        draw_float(editor, &theme, float, grid);
+    }
     if let Some(pos) = draw_cmdline(editor, &theme, grid, height - 1) {
         cursor = Some(pos);
     }
@@ -130,11 +133,11 @@ impl Pane<'_> {
                 grid.set(self.rect.col + x, top_row + r, " ", 1, self.theme.line_nr);
             }
         }
-        // A diagnostic's sign goes on its first line; the most severe one wins.
+        // A diagnostic's sign goes on its first line. They all have the same priority, so the
+        // last one placed shows.
         let mut signs: std::collections::HashMap<usize, u8> = std::collections::HashMap::new();
         for (start, _, d) in &diagnostics {
-            let s = signs.entry(start.line).or_insert(d.severity);
-            *s = (*s).min(d.severity);
+            signs.insert(start.line, d.severity);
         }
         let numx = self.rect.col + signw;
         let mut row = 0;
@@ -581,6 +584,72 @@ impl Pane<'_> {
         } else {
             format!("{:>2}%", above * 100 / (above + below))
         }
+    }
+}
+
+/// A floating window: its lines in NormalFloat, wrapped at its width, with its buffer's syntax
+/// and its own highlights.
+fn draw_float(editor: &Editor, theme: &Theme, float: &flux_view::float::Float, grid: &mut Grid) {
+    let Some(buffer) = editor.buffer(float.buffer) else {
+        return;
+    };
+    let text = &buffer.text;
+    let base = theme.normal_float;
+    for r in 0..float.height {
+        for x in 0..float.width {
+            grid.set(float.col + x, float.row + r, " ", 1, base);
+        }
+    }
+    let spans = match &buffer.syntax {
+        Some(s) if editor.syntax_on => s.highlights(text, 0..text.line_count()),
+        _ => Vec::new(),
+    };
+    let mut row = 0;
+    for line in 0..text.line_count() {
+        if row >= float.height {
+            break;
+        }
+        // Floats wrap with 'linebreak'.
+        let layout = flux_core::layout_line_linebreak(
+            &text.line_str(line),
+            buffer.opts.tabstop,
+            float.width,
+        );
+        let shown = layout.row_count().min(float.height - row);
+        for (r, glyphs) in layout.rows.iter().take(shown).enumerate() {
+            let mut x = float.col;
+            for glyph in glyphs {
+                let style = match glyph.kind {
+                    GlyphKind::Text | GlyphKind::Tab => base,
+                    GlyphKind::Special => base.combine(theme.special_key),
+                    GlyphKind::Filler => base.combine(theme.non_text),
+                };
+                grid.set(x, float.row + row + r, &glyph.symbol, glyph.width, style);
+                x += usize::from(glyph.width);
+            }
+        }
+        let at = Paint {
+            layout: &layout,
+            left: float.col,
+            width: float.width,
+            row: float.row + row,
+            rows: shown,
+        };
+        for span in spans
+            .iter()
+            .filter(|s| s.line == line && !s.capture.is_empty())
+        {
+            at.paint(
+                grid,
+                (span.start, span.end),
+                theme.capture(span.capture),
+                false,
+            );
+        }
+        for h in float.highlights.iter().filter(|h| h.line == line) {
+            at.paint(grid, (h.start, h.end), theme.group(&h.group), false);
+        }
+        row += shown;
     }
 }
 

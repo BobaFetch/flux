@@ -4,6 +4,7 @@ pub mod buffer;
 pub mod editor;
 pub mod explorer;
 pub mod filetype;
+pub mod float;
 pub mod highlight;
 pub mod layout;
 pub mod lsp;

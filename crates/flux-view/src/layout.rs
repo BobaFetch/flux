@@ -27,7 +27,7 @@ pub enum Dir {
 }
 
 /// Where a window is on screen: its text area, and whether a separator column follows it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rect {
     pub row: usize,
     pub col: usize,

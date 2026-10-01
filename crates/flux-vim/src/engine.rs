@@ -285,6 +285,8 @@ impl Engine {
         {
             editor.message = Some(m);
         }
+        // Floats close when the cursor moves or another buffer is shown.
+        editor.check_floats();
         // The number column may have grown or shrunk.
         editor.refresh_window_widths();
         editor.with_window(|win, m| win.scroll_to_cursor(m));
