@@ -1,0 +1,12 @@
+import React, { useState } from "react";
+
+type Props = { title: string; count?: number };
+
+export function Card({ title, count = 0 }: Props): JSX.Element {
+	const [open, setOpen] = useState<boolean>(false);
+	return (
+		<section className="card">
+		<h1>{title}</h1>
+		</section>
+	);
+}

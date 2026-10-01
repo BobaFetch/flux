@@ -1,0 +1,62 @@
+import { readFile, writeFile } from "fs/promises";
+import path from "path";
+
+const MAX = 10;
+let total = 0;
+
+function sum(values) {
+  let acc = 0;
+  for (const v of values) {
+    if (v > MAX) {
+      continue;
+    } else if (v < 0) {
+      acc -= v;
+    } else {
+      acc += v;
+    }
+  }
+  return acc;
+}
+
+function braceless(x) {
+  if (x)
+    return 1;
+  else
+    return 2;
+}
+
+function loops(items) {
+  for (let i = 0; i < items.length; i++)
+    total += items[i];
+  while (total > 100)
+    total -= 10;
+  do {
+    total++;
+  } while (total < 5);
+  return total;
+}
+
+function pick(kind) {
+  switch (kind) {
+    case "a":
+      return 1;
+    case "b": {
+      const x = 2;
+      return x;
+    }
+    default:
+      return 0;
+  }
+}
+
+try {
+  sum([1, 2, 3]);
+} catch (err) {
+  console.error(err);
+} finally {
+  total = 0;
+}
+
+export default function main() {
+  return pick("a") + loops([1, 2]);
+}

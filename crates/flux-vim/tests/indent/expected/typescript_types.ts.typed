@@ -1,0 +1,58 @@
+import { readFile } from "fs/promises";
+import type { Stats } from "fs";
+
+export interface Shape {
+	readonly name: string;
+	area(): number;
+	tags?: string[];
+}
+
+type Id = string | number;
+
+type Pair<T> = {
+	first: T;
+	second: T;
+};
+
+enum Color {
+	Red,
+	Green = "green",
+		Blue,
+}
+
+export class Circle implements Shape {
+	public readonly name = "circle";
+	private cache: Map<string, number> = new Map();
+
+	constructor(private r: number) {
+		this.cache.set("r", r);
+	}
+
+	area(): number {
+		return Math.PI * this.r ** 2;
+	}
+
+	static unit(): Circle {
+		return new Circle(1);
+	}
+}
+
+function first<T>(items: T[]): T | undefined {
+	if (items.length > 0) {
+		return items[0];
+	}
+	return undefined;
+}
+
+export async function load(path: string): Promise<string> {
+	const text = await readFile(path, "utf8");
+	return text;
+}
+
+namespace Geometry {
+	export const origin = { x: 0, y: 0 };
+}
+
+declare module "lib" {
+	export function run(): void;
+}

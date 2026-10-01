@@ -1,0 +1,55 @@
+const config = {
+  name: "flux",
+  nested: {
+    deep: [1, 2, 3],
+    other: { a: 1 },
+  },
+  list: [
+    "one",
+    "two",
+  ],
+  fn() {
+    return this.name;
+  },
+};
+
+const long = 1 +
+  2 +
+  3;
+
+const cond = config.name === "flux"
+  ? "yes"
+  : "no";
+
+const chained = [1, 2, 3]
+  .map((x) => x * 2)
+  .filter((x) => x > 2)
+  .reduce((a, b) => a + b, 0);
+
+const arrow = (a, b) => {
+  return a + b;
+};
+
+const short = (x) =>
+  x * 2;
+
+promise.then((value) => {
+  console.log(value);
+}).catch((err) => {
+  console.error(err);
+});
+
+setTimeout(function () {
+  run();
+}, 100);
+
+call(first,
+  second,
+  third);
+
+const text = `template ${config.name}
+spanning lines`;
+
+const re = /ab+c/g;
+const both = a && b ||
+  c;

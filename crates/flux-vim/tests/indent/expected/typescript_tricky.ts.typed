@@ -1,0 +1,45 @@
+type Result =
+	| { ok: true; value: number }
+| { ok: false; error: string };
+
+@Component({
+	selector: "app",
+})
+export abstract class Base<T extends object = {}> {
+	protected abstract make(): T;
+
+	run(input?: T): T | null {
+		const value = input?.toString() ?? "none";
+		if (!value) {
+			return null;
+		} else if (value.length > 3) {
+			return this.make();
+		}
+		return input ?? null;
+	}
+}
+
+function guard(x: unknown): x is string {
+	return typeof x === "string";
+}
+
+const { a, b: renamed, ...rest } = source;
+const make = () => ({
+	a: 1,
+	b: 2,
+});
+
+for await (const chunk of stream) {
+	handle(chunk);
+}
+
+if (a)
+	if (b)
+		one();
+else
+	two();
+
+const msg = "a string with ( and { inside";
+const tpl = `template with ${value} and { brace`;
+	const value2 = cond ? left : right;
+	export default Base;
