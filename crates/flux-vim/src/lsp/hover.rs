@@ -270,7 +270,7 @@ mod tests {
     fn hover_lines() {
         assert_eq!(
             split_lines("desc\n\nmore\n@param x a\n\n@return y\n", true),
-            ["desc", "", "more", "@param x a", "", "@return y"]
+            ["desc", "", "more", "", "@param x a", "", "@return y"]
         );
         assert_eq!(
             normalize(

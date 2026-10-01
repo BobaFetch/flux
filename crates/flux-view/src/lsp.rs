@@ -142,8 +142,11 @@ pub struct Diagnostic {
     /// Where it was in the buffer's text when it came, as (line, byte column) points, and the
     /// text's revision then: like Neovim's extmarks, diagnostics move with edits until the
     /// server sends new ones.
-    pub placed: Option<(Revision, (usize, usize), (usize, usize))>,
+    pub placed: Option<Placed>,
 }
+
+/// Where a diagnostic was: the text revision, and its start and end as (line, byte column).
+pub type Placed = (Revision, (usize, usize), (usize, usize));
 
 /// Move point `p` (line, byte column) through `edit`, like an extmark: a point in deleted text
 /// goes to where the deletion was; text inserted at the point pushes it along with

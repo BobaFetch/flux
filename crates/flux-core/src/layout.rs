@@ -126,7 +126,7 @@ pub fn layout_line_linebreak(line: &str, tabstop: usize, width: usize) -> LineLa
             // Break after the last break character, unless that leaves the row empty.
             let cut = row
                 .iter()
-                .rposition(|g| breaks_after(g))
+                .rposition(&breaks_after)
                 .map(|i| i + 1)
                 .filter(|&i| i < row.len());
             let moved = match cut {
