@@ -60,6 +60,9 @@ pub struct Buffer {
     pub directory: bool,
     /// The parser for the buffer's filetype, if flux has one.
     pub syntax: Option<flux_syntax::Syntax>,
+    /// The buffer shows a quickfix or location list (`'buftype'` `quickfix`, see
+    /// [`crate::quickfix`]). It can't be changed.
+    pub quickfix: Option<crate::quickfix::ListKind>,
     disk: Option<DiskState>,
 }
 
@@ -81,6 +84,7 @@ impl Buffer {
             opts: Default::default(),
             directory: false,
             syntax: None,
+            quickfix: None,
             disk: None,
         }
     }
@@ -200,10 +204,18 @@ impl Buffer {
 
     /// The name Vim shows for the buffer.
     pub fn name(&self) -> String {
-        match &self.path {
-            Some(path) => path.display().to_string(),
-            None => "[No Name]".into(),
+        match (&self.path, self.quickfix) {
+            (_, Some(crate::quickfix::ListKind::Quickfix)) => "[Quickfix List]".into(),
+            (_, Some(crate::quickfix::ListKind::Location)) => "[Location List]".into(),
+            (Some(path), None) => home_replace(path),
+            (None, None) => "[No Name]".into(),
         }
+    }
+
+    /// Whether the buffer can't be changed ('modifiable' off): a directory listing or a
+    /// quickfix list.
+    pub fn nomodifiable(&self) -> bool {
+        self.directory || self.quickfix.is_some()
     }
 
     pub fn modified(&self) -> bool {
@@ -423,6 +435,21 @@ fn write_atomically(path: &Path, contents: &[u8]) -> io::Result<()> {
         fs::remove_file(&tmp).ok();
     }
     result
+}
+
+/// Vim's `home_replace`: an absolute path in the home directory shown starting with `~`.
+pub fn home_replace(path: &Path) -> String {
+    if path.is_absolute()
+        && let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty())
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return if rest.as_os_str().is_empty() {
+            "~".into()
+        } else {
+            format!("~/{}", rest.display())
+        };
+    }
+    path.display().to_string()
 }
 
 #[cfg(test)]

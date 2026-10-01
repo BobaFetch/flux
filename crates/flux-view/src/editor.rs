@@ -128,6 +128,8 @@ pub struct Editor {
     pub lsp: crate::lsp::LspState,
     /// Floating windows (hover, diagnostics), drawn over the others.
     pub floats: Vec<crate::float::Float>,
+    /// Quickfix and location lists, and the tag stacks (see [`crate::quickfix`]).
+    pub quickfix: crate::quickfix::QuickfixState,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
@@ -144,6 +146,9 @@ pub struct Editor {
     /// message line was produced. Quitting the pager early stops there, as Vim does (it pages
     /// while the command runs).
     pub message_positions: Vec<Option<Cursor>>,
+    /// Highlights in the message's lines (`:tags` shows its header in Title): line, char
+    /// range and group.
+    pub message_highlights: Vec<(usize, usize, usize, &'static str)>,
     /// The furthest message row the pager has reached (the command has run up to it).
     pub more_max_row: usize,
     /// The window's top line before the command that made the message.
@@ -220,6 +225,7 @@ impl Editor {
             matchparen: None,
             lsp: Default::default(),
             floats: Vec::new(),
+            quickfix: Default::default(),
             registers: Registers::default(),
             hit_enter: false,
             more_top: None,
@@ -227,6 +233,7 @@ impl Editor {
             keep_msg: false,
             kept_message: None,
             message_positions: Vec::new(),
+            message_highlights: Vec::new(),
             more_max_row: 0,
             more_restore_top: None,
             fresh_message_base: None,
@@ -635,13 +642,29 @@ impl Editor {
     /// `:split` / `:vsplit`: a new window above (or left of) the current one, showing the same
     /// buffer at the same place, becomes current. `size` is a count for its height or width.
     pub fn split(&mut self, vertical: bool, size: Option<usize>) -> bool {
-        let id = WindowId(self.next_window);
         let after = if vertical {
             self.options.splitright
         } else {
             self.options.splitbelow
         };
-        if !self.layout.split(self.window.id, id, vertical, size, after) {
+        self.split_placed(vertical, size, Some(after))
+    }
+
+    /// Like [`Editor::split`], with the new window below / right of the current one when
+    /// `after` is `Some(true)`, above / left of it with `Some(false)`, and with `None` at the
+    /// bottom of the screen, full width (`:botright`).
+    pub fn split_placed(
+        &mut self,
+        vertical: bool,
+        size: Option<usize>,
+        after: Option<bool>,
+    ) -> bool {
+        let id = WindowId(self.next_window);
+        let fits = match after {
+            Some(after) => self.layout.split(self.window.id, id, vertical, size, after),
+            None => self.layout.split_bottom(id, size),
+        };
+        if !fits {
             self.error("E36: Not enough room");
             return false;
         }
@@ -650,6 +673,7 @@ impl Editor {
         new.id = id;
         let old = std::mem::replace(&mut self.window, new);
         self.prev_window = Some(old.id);
+        self.quickfix.window_split(old.id, id);
         self.windows.push(old);
         // A count stands in for 'winheight' or 'winwidth' while entering the new window.
         let (min_height, min_width) = match size {
@@ -923,6 +947,7 @@ impl Editor {
         self.message = Some(Message { text, kind });
         self.kept_message = None;
         self.message_positions.clear();
+        self.message_highlights.clear();
         self.more_max_row = 0;
         self.more_restore_top = None;
         self.fresh_message_base = None;

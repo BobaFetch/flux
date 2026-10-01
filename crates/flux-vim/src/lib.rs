@@ -14,6 +14,7 @@ pub mod motion;
 mod normal;
 mod open_line;
 pub mod parse;
+mod quickfix;
 mod search;
 mod set;
 mod substitute;

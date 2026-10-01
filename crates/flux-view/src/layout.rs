@@ -529,6 +529,47 @@ impl Layout {
         true
     }
 
+    /// `:botright split`: `new` as a full-width window at the bottom of the screen, `size`
+    /// rows high (half the last window without one), like Vim's `win_split` with `WSP_BOT`:
+    /// the rows come from the bottom of the frames above. Returns false when there's no room.
+    pub fn split_bottom(&mut self, new: WindowId, size: Option<usize>) -> bool {
+        let available = self.root.height;
+        let min = self.root.min_height(None);
+        if available < WINMINHEIGHT + STATUS + min {
+            return false;
+        }
+        let last = self.root.last_window();
+        let last_height = self.rect(last).map_or(0, |r| r.height);
+        let new_size = size
+            .unwrap_or(last_height / 2)
+            .min(available - min - STATUS)
+            .max(WINMINHEIGHT);
+        let (width, height) = (self.root.width, self.root.height);
+        let new_frame = Frame::leaf(new, width, new_size + STATUS);
+        let mut old = std::mem::replace(&mut self.root, Frame::leaf(new, width, height));
+        old.new_height(height - new_size - STATUS, false);
+        let children = match old.kind {
+            Kind::Col(mut c) => {
+                c.push(new_frame);
+                c
+            }
+            kind => vec![
+                Frame {
+                    kind,
+                    width,
+                    height: old.height,
+                },
+                new_frame,
+            ],
+        };
+        self.root = Frame {
+            kind: Kind::Col(children),
+            width,
+            height,
+        };
+        true
+    }
+
     /// Remove `win`. Its space goes to the next window in its row or column (the previous one
     /// if it was last), which is returned as the one to make current. `None` when it's the
     /// only window.

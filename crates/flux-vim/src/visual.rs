@@ -343,7 +343,7 @@ impl Engine {
         let range = self.visual_range(editor, lines);
         let size = self.visual_size(editor, lines);
         self.exit_visual(editor);
-        if op.changes_text() && editor.current_buffer().directory {
+        if op.changes_text() && editor.current_buffer().nomodifiable() {
             editor.error(flux_view::explorer::NOT_MODIFIABLE);
             self.failed = true;
             return;

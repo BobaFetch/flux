@@ -230,6 +230,22 @@ impl Pane<'_> {
                     at.paint(grid, (from, to), self.theme.group(group), false);
                 }
             }
+            // A quickfix window: Vim's `syntax/qf.vim`, and the current entry in QuickFixLine
+            // over it.
+            if self.buffer().quickfix.is_some() {
+                let s = text.line_str(line);
+                for (from, to, group) in flux_view::quickfix::line_highlights(&s) {
+                    at.paint(grid, (from, to), self.theme.group(group), false);
+                }
+                if self
+                    .editor
+                    .qf_list_of(win.buffer)
+                    .is_some_and(|l| l.idx == line)
+                {
+                    let style = self.theme.group("QuickFixLine");
+                    at.paint(grid, (0, text.line_len(line)), style, false);
+                }
+            }
             // A hover float's range (LspReferenceTarget).
             for f in &self.editor.floats {
                 if f.window != win.id {
@@ -516,6 +532,16 @@ impl Pane<'_> {
             }
         }
         let buffer = self.buffer();
+        if buffer.quickfix.is_some() {
+            // The statusline `ftplugin/qf.vim` sets: the list's title, and the ruler.
+            let name = match self.editor.qf_list_of(self.win.buffer) {
+                Some(list) => format!("{} {} ", buffer.name(), list.title),
+                None => format!("{} ", buffer.name()),
+            };
+            let ruler = format!("{:<15} {}", self.cursor_ruler(), self.relative_position());
+            self.put_statusline(grid, y, &name, vec![(ruler, style)], style);
+            return;
+        }
         let ruler = format!("{:<14} {}", self.cursor_ruler(), self.relative_position());
         // `%f %h%w%m%r `: the name, a space, the flags and another space.
         let current = self.win.buffer == self.editor.window.buffer;
@@ -547,14 +573,29 @@ impl Pane<'_> {
             right.push((" ".into(), style));
         }
         right.push((ruler, style));
-        let name_width = UnicodeWidthStr::width(name.as_str());
+        self.put_statusline(grid, y, &name, right, style);
+    }
+
+    /// A statusline's text: `name` on the left and `right` against the right edge, or when
+    /// that's too wide, the end of it all after a `<`.
+    fn put_statusline(
+        &self,
+        grid: &mut Grid,
+        y: usize,
+        name: &str,
+        right: Vec<(String, Style)>,
+        style: Style,
+    ) {
+        let left = self.rect.col;
+        let width = self.rect.width;
+        let name_width = UnicodeWidthStr::width(name);
         let right_width: usize = right
             .iter()
             .map(|(t, _)| UnicodeWidthStr::width(t.as_str()))
             .sum();
         if name_width + right_width <= width {
             // `%=` pushes the ruler to the right edge.
-            grid.put_str_until(left, y, &name, style, left + width);
+            grid.put_str_until(left, y, name, style, left + width);
             let mut x = left + width - right_width;
             for (t, st) in &right {
                 x = grid.put_str_until(x, y, t, *st, left + width);
@@ -1014,6 +1055,7 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
         }
         for (i, line) in lines[top..(top + page).min(lines.len())].iter().enumerate() {
             grid.put_str(0, i, line, style);
+            message_highlights(editor, theme, grid, top + i, i);
         }
         let (prompt, prompt_style) = if top < last_top && editor.more_help {
             (
@@ -1036,6 +1078,7 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
     let shown = rows.saturating_sub(2);
     for (i, line) in lines[lines.len() - shown..].iter().enumerate() {
         grid.put_str(0, first + 1 + i, line, style);
+        message_highlights(editor, theme, grid, lines.len() - shown + i, first + 1 + i);
     }
     let end = grid.put_str(
         0,
@@ -1044,6 +1087,45 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
         theme.question,
     );
     Some((end.min(grid.width() - 1), height - 1))
+}
+
+/// Paint the message's highlights on screen row `y`, which shows its wrapped row `row`.
+fn message_highlights(editor: &Editor, theme: &Theme, grid: &mut Grid, row: usize, y: usize) {
+    if editor.message_highlights.is_empty() {
+        return;
+    }
+    let width = grid.width().max(1);
+    let text = editor.message.as_ref().map_or("", |m| m.text.as_str());
+    // Which line the row is in, and the char it starts at.
+    let mut seen = 0;
+    let mut place = None;
+    for (i, l) in text.lines().enumerate() {
+        let pieces = flux_view::editor::wrap(l, width);
+        if row < seen + pieces.len() {
+            let start: usize = pieces[..row - seen].iter().map(|p| p.chars().count()).sum();
+            place = Some((i, start, pieces[row - seen].clone()));
+            break;
+        }
+        seen += pieces.len();
+    }
+    let Some((line, start, piece)) = place else {
+        return;
+    };
+    for &(l, from, to, group) in &editor.message_highlights {
+        if l != line {
+            continue;
+        }
+        let style = theme.group(group);
+        let mut x = 0;
+        for (i, c) in piece.chars().enumerate() {
+            let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if (from..to).contains(&(start + i)) && x < grid.width() {
+                let cell = grid.cell(x, y).clone();
+                grid.set(x, y, &cell.symbol, cell.width, cell.style.combine(style));
+            }
+            x += w;
+        }
+    }
 }
 
 #[cfg(test)]

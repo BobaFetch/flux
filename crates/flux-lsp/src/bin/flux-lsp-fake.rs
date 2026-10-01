@@ -16,8 +16,8 @@
 //!
 //! An entry may have `result` or `error` (for a request) and `send`: messages to send after it
 //! (notifications, or requests with an `id`). A list of entries is used in turn, the last one
-//! from then on. In everything sent, `"$URI"` becomes the triggering message's document URI and
-//! `"$ROOT"` the root URI.
+//! from then on. In everything sent, `"$URI"` becomes the triggering message's document URI,
+//! `$DIR` that URI's directory (`"$DIR/other.rs"`) and `"$ROOT"` the root URI.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -55,7 +55,14 @@ fn fill(v: &Value, uri: &str, root: &str) -> Value {
     match v {
         Value::String(s) if s == "$URI" => Value::String(uri.into()),
         Value::String(s) if s == "$ROOT" => Value::String(root.into()),
-        Value::String(s) => Value::String(s.replace("$URI", uri).replace("$ROOT", root)),
+        Value::String(s) => {
+            let dir = uri.rsplit_once('/').map_or("", |(d, _)| d);
+            Value::String(
+                s.replace("$URI", uri)
+                    .replace("$DIR", dir)
+                    .replace("$ROOT", root),
+            )
+        }
         Value::Array(a) => Value::Array(a.iter().map(|x| fill(x, uri, root)).collect()),
         Value::Object(o) => Value::Object(
             o.iter()

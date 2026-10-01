@@ -299,6 +299,17 @@ impl Engine {
         {
             return;
         }
+        // `<CR>` in a quickfix window goes to the entry under the cursor.
+        if self.pending.is_empty()
+            && editor.current_buffer().quickfix.is_some()
+            && key == Key::plain(KeyCode::Enter)
+        {
+            if let Err(e) = editor.qf_enter() {
+                editor.error(e);
+                self.failed = true;
+            }
+            return;
+        }
         self.pending.push(key);
         match parse::parse(&self.pending, editor.recording.is_some()) {
             Parse::Incomplete => {}
@@ -455,7 +466,7 @@ impl Engine {
     pub(crate) fn edit(&mut self, editor: &mut Editor, edit: Edit) {
         // Commands that would change a listing are refused before they get here; this catches
         // the rest (Ex commands, Insert mode entered some other way).
-        if editor.current_buffer().directory {
+        if editor.current_buffer().nomodifiable() {
             editor.error(flux_view::explorer::NOT_MODIFIABLE);
             self.failed = true;
             return;

@@ -11,6 +11,7 @@ pub mod lsp;
 pub mod marks;
 pub mod matchparen;
 pub mod options;
+pub mod quickfix;
 pub mod registers;
 pub mod search;
 pub mod semantic_tokens;

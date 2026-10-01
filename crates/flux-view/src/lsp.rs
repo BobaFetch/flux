@@ -336,7 +336,8 @@ fn client_capabilities() -> Value {
             "documentSymbol": {
                 "dynamicRegistration": false,
                 "hierarchicalDocumentSymbolSupport": true,
-                "symbolKind": { "valueSet": (1..=26).collect::<Vec<_>>() }
+                "symbolKind": { "valueSet": (1..=26).collect::<Vec<_>>() },
+                "tagSupport": { "valueSet": [1] }
             }
         },
         "window": {

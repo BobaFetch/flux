@@ -8,6 +8,7 @@ use flux_view::Editor;
 use crate::engine::Engine;
 use crate::ex_lines;
 use crate::global;
+use crate::quickfix;
 use crate::set;
 use crate::substitute;
 
@@ -191,6 +192,34 @@ const COMMANDS: &[Command] = &[
     cmd("set", 2, set::set),
     cmd("setlocal", 4, set::setlocal),
     cmd("setglobal", 4, set::setglobal),
+    cmd("cc", 2, quickfix::cc).other(),
+    cmd("cnext", 2, quickfix::cc).other(),
+    cmd("cNext", 2, quickfix::cc).other(),
+    cmd("cprevious", 2, quickfix::cc).other(),
+    cmd("crewind", 2, quickfix::cc).other(),
+    cmd("cfirst", 4, quickfix::cc).other(),
+    cmd("clast", 3, quickfix::cc).other(),
+    cmd("cnfile", 3, quickfix::cc).other(),
+    cmd("cNfile", 3, quickfix::cc).other(),
+    cmd("cpfile", 3, quickfix::cc).other(),
+    cmd("copen", 4, quickfix::copen).other(),
+    cmd("cclose", 3, quickfix::cclose),
+    cmd("cwindow", 2, quickfix::cwindow).other(),
+    cmd("ll", 2, quickfix::cc).other(),
+    cmd("lnext", 3, quickfix::cc).other(),
+    cmd("lNext", 2, quickfix::cc).other(),
+    cmd("lprevious", 2, quickfix::cc).other(),
+    cmd("lrewind", 2, quickfix::cc).other(),
+    cmd("lfirst", 4, quickfix::cc).other(),
+    cmd("llast", 3, quickfix::cc).other(),
+    cmd("lnfile", 3, quickfix::cc).other(),
+    cmd("lNfile", 3, quickfix::cc).other(),
+    cmd("lpfile", 3, quickfix::cc).other(),
+    cmd("lopen", 3, quickfix::lopen).other(),
+    cmd("lclose", 3, quickfix::lclose),
+    cmd("lwindow", 2, quickfix::lwindow).other(),
+    cmd("pop", 2, quickfix::pop).other(),
+    cmd("tags", 4, quickfix::tags),
 ];
 
 /// What a command was given besides its name.
@@ -201,6 +230,8 @@ pub(crate) struct Args<'a> {
     pub count: Option<usize>,
     /// The `:vertical` modifier.
     pub vertical: bool,
+    /// The `:botright` modifier.
+    pub botright: bool,
     /// The range, 1-based (line 0 only for commands that allow it), and how many addresses were
     /// given (0 when the command got its default range).
     pub line1: usize,
@@ -228,9 +259,17 @@ pub fn run(engine: &mut Engine, editor: &mut Editor, line: &str) {
         return;
     }
     let mut vertical = false;
-    if let Some(rest) = strip_modifier(line, "vertical", 4) {
-        vertical = true;
-        line = rest;
+    let mut botright = false;
+    loop {
+        if let Some(rest) = strip_modifier(line, "vertical", 4) {
+            vertical = true;
+            line = rest;
+        } else if let Some(rest) = strip_modifier(line, "botright", 2) {
+            botright = true;
+            line = rest;
+        } else {
+            break;
+        }
     }
     let range = match parse_range(editor, line) {
         Ok(r) => r,
@@ -345,6 +384,7 @@ pub fn run(engine: &mut Engine, editor: &mut Editor, line: &str) {
         args,
         count,
         vertical,
+        botright,
         line1: line1.max(0) as usize,
         line2: line2.max(0) as usize,
         addr_count,

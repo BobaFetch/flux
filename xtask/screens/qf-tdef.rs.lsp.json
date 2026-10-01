@@ -1,0 +1,11 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-16", "typeDefinitionProvider": true },
+  "on": {
+    "textDocument/typeDefinition": { "result": [
+      { "targetUri": "$DIR/search.txt", "targetRange": { "start": { "line": 0, "character": 0 }, "end": { "line": 4, "character": 1 } },
+        "targetSelectionRange": { "start": { "line": 2, "character": 5 }, "end": { "line": 2, "character": 10 } } },
+      { "targetUri": "$URI", "targetRange": { "start": { "line": 0, "character": 0 }, "end": { "line": 2, "character": 1 } },
+        "targetSelectionRange": { "start": { "line": 0, "character": 3 }, "end": { "line": 0, "character": 10 } } }
+    ] }
+  }
+}

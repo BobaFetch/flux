@@ -1,0 +1,11 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8", "referencesProvider": true },
+  "on": {
+    "textDocument/references": { "result": [
+      { "uri": "$URI", "range": { "start": { "line": 6, "character": 12 }, "end": { "line": 6, "character": 19 } } },
+      { "uri": "$URI", "range": { "start": { "line": 0, "character": 3 }, "end": { "line": 0, "character": 10 } } },
+      { "uri": "$URI", "range": { "start": { "line": 5, "character": 12 }, "end": { "line": 5, "character": 19 } } },
+      { "uri": "$URI", "range": { "start": { "line": 7, "character": 19 }, "end": { "line": 7, "character": 26 } } }
+    ] }
+  }
+}

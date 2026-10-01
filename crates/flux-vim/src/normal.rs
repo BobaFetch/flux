@@ -35,7 +35,7 @@ impl Engine {
             count,
             visual: None,
         };
-        if editor.current_buffer().directory && changes_text(&action) {
+        if editor.current_buffer().nomodifiable() && changes_text(&action) {
             editor.error(flux_view::explorer::NOT_MODIFIABLE);
             self.failed = true;
             return;
@@ -222,6 +222,11 @@ impl Engine {
             }
             Action::Reselect => self.reselect(editor),
             Action::Lsp(cmd) => self.lsp_command(editor, cmd, count),
+            Action::ExCount { cmd, count1 } => {
+                let n = count.or(count1.then_some(1));
+                let arg = n.map(|n| format!(" {n}")).unwrap_or_default();
+                crate::ex::run(self, editor, &format!("{cmd}{arg}"));
+            }
             Action::InsertAtLastInsert => {
                 if let Some(p) = editor.current_buffer().marks.get('^') {
                     let line = p.line.min(editor.text().last_line());
