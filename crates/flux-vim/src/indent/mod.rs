@@ -6,9 +6,6 @@
 //! Neovim with the corpus in `tests/indent` (`cargo xtask indent gen|check`). Lines are 0-based
 //! here, unlike Vim script.
 
-// The helpers are for the indenters being ported.
-#![allow(dead_code)]
-
 mod cindent;
 mod javascript;
 mod json;
@@ -127,11 +124,6 @@ impl<'a> Ctx<'a> {
         (0..=n.min(self.line_count().saturating_sub(1)))
             .rev()
             .find(|&l| !self.line(l).trim().is_empty())
-    }
-
-    /// The first line at or below `n` that isn't blank (Vim's `nextnonblank()`).
-    pub fn nextnonblank(&self, n: usize) -> Option<usize> {
-        (n..self.line_count()).find(|&l| !self.line(l).trim().is_empty())
     }
 
     /// Whether syntax information is available (Vim's `has('syntax_items')` with syntax on).

@@ -677,7 +677,7 @@ impl Ts<'_> {
 
         // In a multi-line comment, cindent does the right thing.
         if self.in_multiline_comment(v, 1) && !self.is_line_comment(v, 1) {
-            return cindent::get_c_indent(self.ctx) as isize;
+            return cindent::get_c_indent(self.ctx).map_or(-1, |n| n as isize);
         }
 
         let blank = first.is_none();

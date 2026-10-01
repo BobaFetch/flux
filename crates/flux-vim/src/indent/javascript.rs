@@ -971,7 +971,7 @@ impl Js<'_> {
         let trimmed = raw.trim_start_matches([' ', '\t']);
         if Self::is_comment(stack) {
             if trimmed.starts_with('*') {
-                return Some(cindent::get_c_indent(ctx));
+                return cindent::get_c_indent(ctx);
             } else if !(trimmed.starts_with("//") || trimmed.starts_with("/*")) {
                 return None;
             }
