@@ -362,4 +362,87 @@ Known gaps:
 
 ## M6: LSP
 
+- Language servers (new `flux-lsp` crate), started per filetype and project root like Neovim's
+  `vim.lsp.enable` configs: rust-analyzer, clangd, lua-language-server, basedpyright or
+  pyright, typescript-language-server, bash-language-server, taplo,
+  vscode-json-language-server and marksman, each only when it's installed. `$FLUX_LSP_CONFIG`
+  names a JSON file with a list of configs to use instead. Documents are synced
+  incrementally (in UTF-8, UTF-16 or UTF-32 positions, as the server prefers); saves and
+  buffer deletes are reported; servers are shut down on quit. The server log is
+  `~/.local/state/flux/lsp.log`.
+- Diagnostics as Neovim shows them: signs in the sign column (`'signcolumn'`), underlines
+  colored by severity, `E:1 W:2` in the statusline, held back while in Insert mode, and kept
+  in place as the text is edited. `]d` `[d` `]D` `[D` jump, `CTRL-W d` opens a float with
+  the diagnostics under the cursor.
+- `K`: hover in a Markdown float, with code highlighted and Markdown markup hidden
+  (`'conceallevel'` 2, as in Neovim's floats), the hovered symbol highlighted.
+- Locations: the quickfix list and location lists, with Neovim's list window (`:copen`,
+  `:cclose`, `:cwindow`, `:cc`, `:cnext`, `:cprevious`, `:cfirst`, `:clast`, `:cnfile`,
+  `:cpfile`, the `:l…` versions, `:botright`), `]q` `[q` `]Q` `[Q` `]l` `[l` …, `<CR>` in the
+  list. `grr` references, `gri` implementation, `grt` type definition (one result jumps,
+  several fill the quickfix list), `gO` document symbols (location list), `CTRL-]` definition
+  through the tag stack, `CTRL-T`, `:pop`, `:tags`.
+- Completion: Vim's popup menu (`'completeopt'`, `'pumheight'`, `'pumwidth'`) with the info
+  window for documentation. `CTRL-X CTRL-O` asks the servers (Neovim's LSP omnifunc:
+  filtering, resolve for documentation, additional edits on accept, snippets with tabstops,
+  placeholders in Select mode, `<Tab>`/`<S-Tab>`, mirrors and choices). `CTRL-N`/`CTRL-P`
+  complete keywords from the buffers. `CTRL-Y`, `CTRL-E`, `<CR>`, `<BS>`, narrowing as you
+  type, and the mode messages are Vim's.
+- `grn` rename (with prepareRename and an `input()` prompt), `gra` code actions (Normal and
+  Visual, Vim's numbered list, resolve, commands), Insert-mode `CTRL-S` signature help with
+  the active parameter highlighted.
+- `gq` and `gw`: Vim's formatting (comment leaders, 'formatoptions' `2 n w p 1`, numbered
+  lists, nroff paragraphs), or the server's range formatting when it has one, as Neovim's
+  'formatexpr' does.
+- Semantic tokens: `@lsp.type.*`, `@lsp.mod.*` and `@lsp.typemod.*` highlights over
+  tree-sitter's, full, delta and range requests, following edits until the next answer.
+- `:lsp enable|disable|restart|stop [name …]`.
+
+Verified:
+- All 1163 oracle cases match Neovim 0.12.5 (54 new, mostly `gq`/`gw`).
+- `cargo xtask screens` runs a scripted fake language server (`flux-lsp-fake`) under both
+  Neovim and flux for the LSP samples and compares the screens cell by cell: 120 samples (94 new),
+  all identical in 24-bit and 16 colors (diagnostics, floats, hover, quickfix and the LSP
+  location commands, the popup menu and snippets, rename, code actions, formatting,
+  signature help, `:lsp`, semantic tokens).
+- With the fake server logging, flux sends the same messages in the same order as Neovim
+  (initialize, didOpen, didChange, didSave, the requests, shutdown, exit).
+
+### Manual check
+
+1. In `~/Projects/flux`, `flux crates/flux-view/src/editor.rs`: rust-analyzer starts (after
+   it finishes loading, diagnostics appear). Add an error (`let x: u32 = "a";`): an `E` sign,
+   a red underline and `E:1` in the statusline after leaving Insert mode. `]d`, `[d`,
+   `CTRL-W d`.
+2. `K` on a function or type: a float with its signature highlighted and docs; moving closes
+   it.
+3. `CTRL-]` on a call goes to its definition, `CTRL-T` comes back. `grr` on a function opens
+   the quickfix list; `<CR>` on an entry, `:cnext`, `:cclose`. `gO` lists the file's symbols.
+4. In Insert mode, type `editor.` and `CTRL-X CTRL-O`: the menu with documentation beside it;
+   `CTRL-N`, `CTRL-Y`. Accept a function with arguments: `<Tab>` moves through them.
+   `CTRL-N` alone completes words from the buffer.
+5. `grn` on a local variable, type a new name, `<CR>`: every use changes. `gra` on the error
+   from step 1: pick an action.
+6. Inside a call's parentheses in Insert mode, `CTRL-S`: the signature with the current
+   argument highlighted.
+7. `gqip` on a long comment paragraph (in a `.txt` or Markdown file it formats with
+   'textwidth'; in Rust rust-analyzer formats the range).
+8. Semantic colors: after rust-analyzer loads, names change color slightly (e.g. mutable
+   variables underlined, as in Neovim).
+9. `:lsp restart`, `:lsp stop`, `:lsp enable`. Also try a Python, TypeScript or Lua file if
+   those servers are installed.
+
+Known gaps:
+- Floats can't be focused (`KK` doesn't enter the hover window; `CTRL-S` twice doesn't cycle
+  signatures in it).
+- Progress (`$/progress`) isn't shown, as in Neovim 0.12 by default.
+- Not done: `:clist`, `:colder`/`:cnewer`, `:tnext`/`:tselect` (several definitions go to the
+  first), 'winfixheight' for the list window; `'completeopt'` `fuzzy`, `longest` and
+  `preview`, other `CTRL-X` modes, 'infercase', running a completion item's command; change
+  annotations that need confirmation; 'formatoptions' `m`/`M`, 'formatprg', a user
+  'formatexpr'; `input()` history; `:lsp` completion; inlay hints, code lenses, document
+  highlight, workspace symbols, call hierarchy (not default keys in Neovim either).
+- When several keys arrive at once, Neovim skips redraws in between; flux redraws after
+  each, so a fast typist can briefly see states Neovim never draws.
+
 ## M7: Picker, Lua config, clipboard
