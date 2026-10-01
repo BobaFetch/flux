@@ -46,6 +46,11 @@ pub(crate) struct Ctx<'a> {
     pub opts: &'a BufferOptions,
     /// The line being indented (Vim's `v:lnum`).
     pub lnum: usize,
+    /// The cursor's byte column on `lnum` (0 when indenting with `=`), where searches from
+    /// the cursor (Vim's `searchpair()`) start.
+    pub col: usize,
+    /// In Insert mode (Vim's `mode()` is `i`).
+    pub insert: bool,
     syntax: Option<&'a flux_syntax::Syntax>,
     spans: RefCell<HashMap<usize, Vec<flux_syntax::Span>>>,
 }
@@ -53,7 +58,16 @@ pub(crate) struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn new(editor: &'a Editor, lnum: usize) -> Self {
         let buffer = editor.current_buffer();
+        let cur = editor.cursor();
+        let col = if cur.line == lnum {
+            let s = buffer.text.line_str(lnum);
+            s.char_indices().nth(cur.col).map_or(s.len(), |(i, _)| i)
+        } else {
+            0
+        };
         Self {
+            col,
+            insert: editor.mode == flux_view::Mode::Insert,
             text: &buffer.text,
             opts: &buffer.opts,
             lnum,
@@ -69,6 +83,8 @@ impl<'a> Ctx<'a> {
             text,
             opts,
             lnum,
+            col: 0,
+            insert: false,
             syntax: None,
             spans: RefCell::default(),
         }
