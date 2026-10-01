@@ -55,7 +55,9 @@ impl Servers {
                         Ok(server) => {
                             self.running.insert(client, server);
                         }
-                        Err(e) => flux_vim::lsp::handle_exit(editor, client, &e),
+                        Err(e) => {
+                            flux_vim::lsp::handle_exit(editor, client, &format!("with error: {e}"))
+                        }
                     }
                 }
                 Outgoing::Send { client, message } => {
@@ -84,6 +86,11 @@ impl Servers {
             }
             Event::Exited(id, why) => {
                 self.running.remove(&ClientId(id.0));
+                // Neovim's message points at the log.
+                let why = match &self.log {
+                    Some(log) => format!("{why}. Check log for errors: {}", log.display()),
+                    None => why,
+                };
                 flux_vim::lsp::handle_exit(editor, ClientId(id.0), &why);
             }
         }

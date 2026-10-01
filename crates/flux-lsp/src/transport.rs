@@ -18,7 +18,8 @@ pub struct ServerId(pub usize);
 pub enum Event {
     /// A message (a response, request or notification).
     Message(ServerId, Value),
-    /// The process ended (or couldn't start), with what's known about why.
+    /// The process ended, with what's known about why (`with exit code 1 and signal 0`, as
+    /// Neovim words it).
     Exited(ServerId, String),
 }
 
@@ -26,7 +27,7 @@ pub enum Event {
 pub struct Server {
     pub id: ServerId,
     to_server: mpsc::UnboundedSender<Value>,
-    child: Child,
+    kill: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Server {
@@ -53,12 +54,13 @@ impl Server {
         let stderr = child.stderr.take().ok_or("no stderr")?;
         let (to_server, from_editor) = mpsc::unbounded_channel();
         tokio::spawn(write_messages(stdin, from_editor));
-        tokio::spawn(read_messages(id, stdout, events));
+        let (kill, killed) = tokio::sync::oneshot::channel();
+        tokio::spawn(supervise(id, child, stdout, events, killed));
         tokio::spawn(log_stderr(program.clone(), stderr, log));
         Ok(Self {
             id,
             to_server,
-            child,
+            kill: Some(kill),
         })
     }
 
@@ -69,7 +71,9 @@ impl Server {
 
     /// End the process now (after `shutdown`/`exit`, or when it doesn't answer).
     pub fn kill(&mut self) {
-        let _ = self.child.start_kill();
+        if let Some(kill) = self.kill.take() {
+            let _ = kill.send(());
+        }
     }
 }
 
@@ -86,27 +90,59 @@ async fn write_messages(
     }
 }
 
+/// Pass on the server's messages until its stdout ends, then report how the process ended.
+async fn supervise(
+    id: ServerId,
+    mut child: Child,
+    stdout: tokio::process::ChildStdout,
+    events: mpsc::UnboundedSender<Event>,
+    mut killed: tokio::sync::oneshot::Receiver<()>,
+) {
+    let read = read_messages(id, stdout, &events);
+    tokio::pin!(read);
+    let error = tokio::select! {
+        error = &mut read => error,
+        _ = &mut killed => {
+            let _ = child.start_kill();
+            None
+        }
+    };
+    let why = match child.wait().await {
+        _ if error.is_some() => format!("with error: {}", error.unwrap_or_default()),
+        Ok(status) => {
+            #[cfg(unix)]
+            let signal = std::os::unix::process::ExitStatusExt::signal(&status).unwrap_or(0);
+            #[cfg(not(unix))]
+            let signal = 0;
+            let code = status.code().unwrap_or(0);
+            format!("with exit code {code} and signal {signal}")
+        }
+        Err(e) => format!("with error: {e}"),
+    };
+    let _ = events.send(Event::Exited(id, why));
+}
+
+/// Pass on messages until stdout ends (`None`) or something is wrong with it (the error).
 async fn read_messages(
     id: ServerId,
     stdout: tokio::process::ChildStdout,
-    events: mpsc::UnboundedSender<Event>,
-) {
+    events: &mpsc::UnboundedSender<Event>,
+) -> Option<String> {
     let mut reader = BufReader::new(stdout);
-    let why = loop {
+    loop {
         match read_frame(&mut reader).await {
             Ok(Some(body)) => match serde_json::from_slice(&body) {
                 Ok(message) => {
                     if events.send(Event::Message(id, message)).is_err() {
-                        return;
+                        return None;
                     }
                 }
-                Err(e) => break format!("invalid message: {e}"),
+                Err(e) => return Some(format!("invalid message: {e}")),
             },
-            Ok(None) => break "exited".to_string(),
-            Err(e) => break e,
+            Ok(None) => return None,
+            Err(e) => return Some(e),
         }
-    };
-    let _ = events.send(Event::Exited(id, why));
+    }
 }
 
 /// One message body, or `None` at the end of the stream.
