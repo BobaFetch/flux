@@ -12,6 +12,8 @@ use crate::grid::{Color, Grid, Style};
 
 /// Vim's NonText and SpecialKey groups: `~` past the end, `@@@`, `>` fillers, `^X`.
 const NON_TEXT: Style = Style::fg(Color::Ansi(8));
+/// Directories in a listing (Vim's Directory).
+const DIRECTORY: Style = Style::fg(Color::Ansi(14));
 const ERROR: Style = Style::fg(Color::Ansi(9));
 /// The Visual selection: a grey background that works on light and dark terminals.
 const VISUAL: Style = Style {
@@ -189,6 +191,19 @@ impl Pane<'_> {
                 self.draw_number(grid, line, top_row + row, numw);
             }
             draw_rows(grid, &layout, left, top_row + row, shown);
+            if self.buffer().directory && text.line_str(line).ends_with('/') {
+                let len = text.line_len(line);
+                highlight_with(
+                    grid,
+                    &layout,
+                    left,
+                    width,
+                    top_row + row,
+                    shown,
+                    (0, len),
+                    DIRECTORY,
+                );
+            }
             if skip > 0 {
                 for x in 0..3.min(width) {
                     grid.set(left + x, top_row + row, "<", 1, NON_TEXT);

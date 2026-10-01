@@ -343,6 +343,11 @@ impl Engine {
         let range = self.visual_range(editor, lines);
         let size = self.visual_size(editor, lines);
         self.exit_visual(editor);
+        if op.changes_text() && editor.current_buffer().directory {
+            editor.error(flux_view::explorer::NOT_MODIFIABLE);
+            self.failed = true;
+            return;
+        }
         let dot = Dot {
             keys,
             count: None,

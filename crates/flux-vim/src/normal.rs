@@ -35,6 +35,11 @@ impl Engine {
             count,
             visual: None,
         };
+        if editor.current_buffer().directory && changes_text(&action) {
+            editor.error(flux_view::explorer::NOT_MODIFIABLE);
+            self.failed = true;
+            return;
+        }
         let done = match action {
             Action::Move(motion::Motion::Mark { name, exact })
                 if self.mark_in_other_buffer(editor, name) =>
@@ -765,6 +770,21 @@ impl Engine {
 
 /// Work out the text an operator covers, applying Vim's adjustments for exclusive motions
 /// (`:h exclusive-linewise`) and for deletes that end at the end of a line.
+/// The command changes the buffer's text (refused in a directory listing).
+fn changes_text(action: &Action) -> bool {
+    match action {
+        Action::Operate(op, _) => op.changes_text(),
+        Action::Put { .. }
+        | Action::Replace(_)
+        | Action::Join { .. }
+        | Action::ToggleCase
+        | Action::RepeatSubstitute { .. }
+        | Action::Insert(_)
+        | Action::InsertAtLastInsert => true,
+        _ => false,
+    }
+}
+
 fn op_range(editor: &Editor, op: Operator, cur: Pos, t: Target) -> Range {
     op_range_between(editor, op, cur, t.pos, t.kind, t.numbered_register, false)
 }
