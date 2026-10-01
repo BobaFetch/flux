@@ -2,6 +2,7 @@
 //! and write files.
 
 mod comments;
+mod completion;
 pub mod engine;
 pub mod ex;
 mod ex_lines;

@@ -23,6 +23,8 @@ pub struct Engine {
     /// The change being recorded while its Insert mode runs.
     pub(crate) recording: Option<Dot>,
     pub(crate) insert: Option<Insert>,
+    /// Insert-mode completion (see [`crate::completion`]).
+    pub(crate) compl: crate::completion::Completion,
     /// A Normal-mode command typed with `CTRL-O` from Insert mode.
     pub(crate) ctrl_o: Option<CtrlO>,
     /// Edits of the undo step being built.
@@ -290,6 +292,7 @@ impl Engine {
         // The number column may have grown or shrunk.
         editor.refresh_window_widths();
         editor.with_window(|win, m| win.scroll_to_cursor(m));
+        editor.pum_ruler_check();
     }
 
     fn normal_key(&mut self, editor: &mut Editor, key: Key) {

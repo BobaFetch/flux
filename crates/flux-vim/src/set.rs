@@ -246,6 +246,22 @@ fn set_string(
     let valid = match def.name {
         "background" => matches!(value.as_str(), "dark" | "light"),
         "signcolumn" => matches!(value.as_str(), "auto" | "yes" | "no"),
+        "completeopt" => value.split(',').filter(|v| !v.is_empty()).all(|v| {
+            matches!(
+                v,
+                "menu"
+                    | "menuone"
+                    | "longest"
+                    | "preview"
+                    | "popup"
+                    | "noinsert"
+                    | "noselect"
+                    | "fuzzy"
+                    | "nosort"
+                    | "preinsert"
+                    | "nearest"
+            )
+        }),
         "filetype" => value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')),

@@ -11,6 +11,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::grid::{Grid, Style};
 use crate::theme::Theme;
 
+mod pum;
+
 /// Draw `editor` into `grid`, returning where the terminal cursor should go. `showcmd` is a
 /// partly typed command, shown at the bottom right as Vim's 'showcmd' does.
 pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, usize)> {
@@ -40,6 +42,7 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
     for float in &editor.floats {
         draw_float(editor, &theme, float, grid);
     }
+    pum::draw(editor, &theme, grid);
     if let Some(pos) = draw_cmdline(editor, &theme, grid, height - 1) {
         cursor = Some(pos);
     }
@@ -561,7 +564,10 @@ impl Pane<'_> {
 
     /// `%l,%c%V`: line, byte column and, when different, screen column. An empty line is `0-1`.
     fn cursor_ruler(&self) -> String {
-        let cursor = self.win.cursor;
+        let cursor = match self.editor.completion.ruler_cursor {
+            Some(c) if self.is_current() => c,
+            _ => self.win.cursor,
+        };
         let text = self.text();
         let line = text.line_str(cursor.line.min(text.line_count().saturating_sub(1)));
         if line.is_empty() {
@@ -899,6 +905,27 @@ fn draw_cmdline(
             let message = editor.message.as_ref()?;
             let style = theme.message(message);
             grid.put_str(0, y, &message.text, style);
+            None
+        }
+        Mode::Insert if editor.completion.show_error && editor.message.is_some() => {
+            let message = editor.message.as_ref()?;
+            let end = grid.put_str(0, y, &message.text, theme.message(message));
+            Some((end.min(grid.width() - 1), y))
+        }
+        Mode::Insert if editor.completion.submode.text.is_some() => {
+            let submode = &editor.completion.submode;
+            let mut end = grid.put_str(0, y, "--", theme.mode_msg);
+            end = grid.put_str(
+                end,
+                y,
+                submode.text.as_deref().unwrap_or(""),
+                theme.mode_msg,
+            );
+            if let Some((extra, group)) = &submode.extra {
+                end = grid.put_str(end, y, " ", theme.mode_msg);
+                let style = group.map_or(theme.mode_msg, |g| theme.group(g));
+                grid.put_str(end, y, extra, style);
+            }
             None
         }
         Mode::Insert | Mode::Visual => {

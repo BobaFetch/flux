@@ -194,6 +194,7 @@ impl Editor {
     /// Shrink floats to the text they show once concealed (Neovim's hover shrinks its window
     /// when code block fences are hidden).
     pub fn fit_floats(&mut self) {
+        self.fit_pum_info();
         for i in 0..self.floats.len() {
             let f = &self.floats[i];
             if f.fitted {

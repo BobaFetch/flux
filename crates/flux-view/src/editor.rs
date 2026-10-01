@@ -128,6 +128,8 @@ pub struct Editor {
     pub lsp: crate::lsp::LspState,
     /// Floating windows (hover, diagnostics), drawn over the others.
     pub floats: Vec<crate::float::Float>,
+    /// Insert-mode completion's menu and mode message (see [`crate::pum`]).
+    pub completion: crate::pum::CompletionView,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
@@ -220,6 +222,7 @@ impl Editor {
             matchparen: None,
             lsp: Default::default(),
             floats: Vec::new(),
+            completion: Default::default(),
             registers: Registers::default(),
             hit_enter: false,
             more_top: None,

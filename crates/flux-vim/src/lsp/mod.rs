@@ -10,7 +10,9 @@ use serde_json::{Value, json};
 use crate::engine::Engine;
 
 mod commands;
+pub(crate) mod completion;
 mod hover;
+mod snippet;
 
 /// Something a server sent.
 pub fn handle_message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Value) {
@@ -18,6 +20,7 @@ pub fn handle_message(engine: &mut Engine, editor: &mut Editor, client: ClientId
     // Diagnostics may have brought the sign column, which narrows the text.
     editor.refresh_window_widths();
     editor.with_window(|w, m| w.scroll_to_cursor(m));
+    editor.pum_ruler_check();
 }
 
 fn message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Value) {
@@ -166,9 +169,9 @@ fn response(
     pending: Pending,
     result: &Value,
 ) {
-    let _ = engine;
     match pending.method.as_str() {
         "initialize" => editor.lsp_initialized(client, result),
+        "completionItem/resolve" => completion::resolved(engine, editor, client, &pending, result),
         "shutdown" => {
             editor.lsp.notify(client, "exit", Value::Null);
             editor.lsp.outbox.push(Outgoing::Kill { client });
@@ -179,9 +182,10 @@ fn response(
 
 /// All the servers asked have answered.
 fn group_done(engine: &mut Engine, editor: &mut Editor, group: flux_view::lsp::Group) {
-    let _ = engine;
-    if group.method.as_str() == "textDocument/hover" {
-        hover::show(editor, group);
+    match group.method.as_str() {
+        "textDocument/hover" => hover::show(editor, group),
+        "textDocument/completion" => completion::show(engine, editor, group),
+        _ => {}
     }
 }
 
