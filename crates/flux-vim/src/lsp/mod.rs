@@ -78,7 +78,7 @@ pub fn handle_exit(editor: &mut Editor, client: ClientId, why: &str) {
     let name = c.name.clone();
     editor.lsp_exited(client);
     if !expected {
-        editor.error(format!("Client {name} quit: {why}"));
+        editor.error(format!("Client {name} quit {why}"));
     }
     ex_lsp::exited(editor, client);
 }
