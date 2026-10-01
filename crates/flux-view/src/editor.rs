@@ -315,7 +315,9 @@ impl Editor {
         let full = self.cwd.join(path);
         match Buffer::open(id, &full) {
             Ok(mut buffer) => {
-                buffer.path = Some(path.to_path_buf());
+                if !buffer.directory {
+                    buffer.path = Some(path.to_path_buf());
+                }
                 let current = self.current_buffer_mut();
                 buffer.positions = std::mem::take(&mut current.positions);
                 buffer.opts = current.opts.clone();
@@ -330,12 +332,23 @@ impl Editor {
     /// one is already open.
     pub fn edit_file(&mut self, path: &Path) -> Result<(), String> {
         let id = match self.find_buffer(path) {
-            Some(id) => id,
+            Some(id) => {
+                // A directory listing is read again each time it is shown.
+                let buffer = self.buffer_mut(id).expect("found");
+                if buffer.directory {
+                    buffer
+                        .reload((0, 0))
+                        .map_err(|e| format!("\"{}\" {e}", path.display()))?;
+                }
+                id
+            }
             None => {
                 let full = self.cwd.join(path);
                 let mut buffer = Buffer::open(BufferId(0), &full)
                     .map_err(|e| format!("\"{}\" {e}", path.display()))?;
-                buffer.path = Some(path.to_path_buf());
+                if !buffer.directory {
+                    buffer.path = Some(path.to_path_buf());
+                }
                 self.add_buffer(buffer)
             }
         };
@@ -384,8 +397,9 @@ impl Editor {
             self.window.pcmark = Some(cursor);
         }
         if let Some(buffer) = self.buffer_mut(id) {
-            buffer.listed = true;
-            if let Err(e) = buffer.load() {
+            let loaded = buffer.load();
+            buffer.listed = !buffer.directory;
+            if let Err(e) = loaded {
                 let name = buffer.name();
                 self.error(format!("\"{name}\" {e}"));
             }

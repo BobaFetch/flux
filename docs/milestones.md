@@ -248,6 +248,31 @@ options not in the list above ('wrap', 'scrolloff', 'list', …). `:set` alone l
 options above, so it shows less than Neovim's. A long command line typed at a prompt over an
 earlier multi-line message scrolls a little differently from Neovim.
 
+## Directory browsing (between M4 and M5) ✅ (awaiting manual check)
+
+A small netrw: `flux .`, `flux some/dir`, `:e dir`, `:sp dir` and `:vs dir` show a listing of
+the directory: `../`, then directories (marked `/`, in the Directory color), then files, each
+sorted by name.
+
+- In a listing: `<CR>` opens the file or directory under the cursor (`../` goes up), `-` goes
+  up with the cursor on the directory just left, `o` / `v` open the entry in a new window.
+  Every other Normal-mode key (`j`, `/pat`, `G`, `CTRL-^`, …) works as usual.
+- `:Explore [dir]` (`:Ex`, `:E`) lists the current file's directory with the cursor on the file;
+  `:Sexplore` / `:Vexplore` do it in a new window.
+- Listings are read-only (E21 for any change, E502 for `:w`), read again each time they are
+  shown and when the terminal regains focus, and not listed by `:ls` / `:bn`.
+
+Not netrw's: no banner, no file operations (`%`, `d`, `D`, `R`), no sorting or hiding options,
+no tree view. Fuzzy file finding is still M7.
+
+### Manual check
+
+1. `flux .` in a project: the listing shows; `j`/`k`/`/name` move; `<CR>` on a directory and on
+   a file; `-` back up lands on the directory you left.
+2. From a file, `:Ex` shows its directory with the cursor on the file; `CTRL-^` returns to it.
+3. `:Vex`, then `o` on a file; `v` on another.
+4. `dd`, `x`, `i`, `p` in a listing give E21; `:w` gives E502.
+
 ## M5: Syntax highlighting
 
 ## M6: LSP

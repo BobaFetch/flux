@@ -55,6 +55,9 @@ pub struct Buffer {
     pub last_visual: Option<(crate::Cursor, crate::Cursor, crate::VisualKind, bool)>,
     /// Buffer-local options ('tabstop', …).
     pub opts: crate::options::BufferOptions,
+    /// The buffer lists a directory (see [`crate::explorer`]). It can't be changed or written,
+    /// and isn't listed by `:ls`.
+    pub directory: bool,
     disk: Option<DiskState>,
 }
 
@@ -74,14 +77,26 @@ impl Buffer {
             positions: Vec::new(),
             last_visual: None,
             opts: Default::default(),
+            directory: false,
             disk: None,
         }
     }
 
-    /// Load `path`. A missing file gives an empty buffer marked as new, as in Vim.
+    /// Load `path`. A missing file gives an empty buffer marked as new, as in Vim; a directory
+    /// gives its listing, named by its absolute path.
     pub fn open(id: BufferId, path: &Path) -> io::Result<Self> {
         let mut buffer = Self::scratch(id);
         buffer.path = Some(path.to_path_buf());
+        if path.is_dir() {
+            let base = std::env::current_dir().unwrap_or_default();
+            let path = crate::explorer::absolute(&base, path);
+            buffer.text = Text::new(&crate::explorer::list_dir(&path)?);
+            buffer.disk = DiskState::of(&path);
+            buffer.path = Some(path);
+            buffer.directory = true;
+            buffer.listed = false;
+            return Ok(buffer);
+        }
         match read_file(path) {
             Ok((text, invalid_utf8)) => {
                 buffer.text = text;
@@ -110,7 +125,7 @@ impl Buffer {
         let path = self.path.clone().ok_or(io::ErrorKind::NotFound)?;
         let fresh = Self::open(self.id, &path)?;
         *self = Self {
-            listed: self.listed,
+            listed: self.listed && !fresh.directory,
             positions: std::mem::take(&mut self.positions),
             opts: self.opts.clone(),
             ..fresh
@@ -204,6 +219,10 @@ impl Buffer {
     /// The file-info message Vim shows after loading, e.g. `"main.rs" 42L, 1337B`.
     pub fn file_info(&self) -> String {
         let mut msg = format!("\"{}\"", self.name());
+        if self.directory {
+            msg.push_str(" is a directory");
+            return msg;
+        }
         if self.new_file {
             msg.push_str(" [New]");
             return msg;
@@ -242,6 +261,9 @@ impl Buffer {
     /// `force` is `:w!`: write even if the file changed on disk or would be overwritten.
     /// Returns Vim's `"name" 3L, 42B written` message, or an error message.
     pub fn write(&mut self, path: Option<&Path>, force: bool) -> Result<String, String> {
+        if self.directory {
+            return Err(format!("E502: \"{}\" is a directory", self.name()));
+        }
         let own = path.is_none() || path == self.path.as_deref();
         let target = match path.or(self.path.as_deref()) {
             Some(p) => p.to_path_buf(),
@@ -328,6 +350,12 @@ impl Buffer {
     /// change.
     pub fn reload(&mut self, cursor: (usize, usize)) -> io::Result<()> {
         let path = self.path.clone().ok_or(io::ErrorKind::NotFound)?;
+        if self.directory {
+            // A listing is just read again; there is nothing to undo.
+            self.text = Text::new(&crate::explorer::list_dir(&path)?);
+            self.disk = DiskState::of(&path);
+            return Ok(());
+        }
         let (new_text, invalid_utf8) = read_file(&path)?;
         let before = self.text.rope().clone();
         let replace = Edit::replace(0..self.text.len_chars(), new_text.rope().to_string());

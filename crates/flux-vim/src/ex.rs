@@ -140,6 +140,9 @@ const COMMANDS: &[Command] = &[
     cmd("only", 2, only),
     cmd("resize", 3, resize).other(),
     cmd("enew", 3, enew),
+    cmd("Explore", 1, explore),
+    cmd("Sexplore", 1, sexplore).other(),
+    cmd("Vexplore", 1, vexplore).other(),
     cmd("buffer", 1, buffer).other(),
     cmd("bnext", 2, bnext).other(),
     cmd("bNext", 2, bprevious).other(),
@@ -851,6 +854,37 @@ fn edit(editor: &mut Editor, a: &Args) {
     }
     if let Err(e) = editor.edit_file(&PathBuf::from(args)) {
         editor.error(e);
+    }
+}
+
+/// `:Explore [dir]` (netrw's): list `dir`, or the current file's directory.
+fn explore(editor: &mut Editor, a: &Args) {
+    if let Err(e) = editor.explore(a.args) {
+        editor.error(e);
+    }
+}
+
+/// `:Sexplore [dir]` / `:Vexplore [dir]`: `:Explore` in a new window.
+fn sexplore(editor: &mut Editor, a: &Args) {
+    explore_in_split(editor, a, a.vertical);
+}
+
+fn vexplore(editor: &mut Editor, a: &Args) {
+    explore_in_split(editor, a, true);
+}
+
+fn explore_in_split(editor: &mut Editor, a: &Args, vertical: bool) {
+    let old = editor.window.id;
+    if !editor.split(vertical, a.count) {
+        return;
+    }
+    editor.in_new_window = true;
+    explore(editor, a);
+    editor.in_new_window = false;
+    let current = editor.window.buffer;
+    let from = editor.window_mut(old);
+    if from.buffer != current {
+        from.alt_buffer = Some(current);
     }
 }
 

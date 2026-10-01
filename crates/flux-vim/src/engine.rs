@@ -291,6 +291,12 @@ impl Engine {
     }
 
     fn normal_key(&mut self, editor: &mut Editor, key: Key) {
+        if self.pending.is_empty()
+            && editor.current_buffer().directory
+            && self.explorer_key(editor, key)
+        {
+            return;
+        }
         self.pending.push(key);
         match parse::parse(&self.pending, editor.recording.is_some()) {
             Parse::Incomplete => {}
@@ -320,6 +326,25 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// The keys of a directory listing, like netrw's: `<CR>` opens the entry under the cursor,
+    /// `o` / `v` open it in a new window, `-` goes up a directory. Other keys work as usual.
+    fn explorer_key(&mut self, editor: &mut Editor, key: Key) -> bool {
+        let result = if key == Key::plain(KeyCode::Enter) {
+            editor.open_entry()
+        } else if key == Key::char('-') {
+            editor.open_parent()
+        } else if key == Key::char('o') || key == Key::char('v') {
+            editor.open_entry_in_split(key == Key::char('v'))
+        } else {
+            return false;
+        };
+        if let Err(e) = result {
+            editor.error(e);
+            self.failed = true;
+        }
+        true
     }
 
     /// Record a finished change for `.`.
@@ -426,6 +451,13 @@ impl Engine {
     /// Apply `edit` to the current buffer as part of the undo step being built, moving marks
     /// and setting `'[`, `']` and `'.`.
     pub(crate) fn edit(&mut self, editor: &mut Editor, edit: Edit) {
+        // Commands that would change a listing are refused before they get here; this catches
+        // the rest (Ex commands, Insert mode entered some other way).
+        if editor.current_buffer().directory {
+            editor.error(flux_view::explorer::NOT_MODIFIABLE);
+            self.failed = true;
+            return;
+        }
         let cursor = editor.cursor();
         let first = self.change.is_none();
         let shift = LineShift::of(editor.text(), &edit);
@@ -935,6 +967,110 @@ mod tests {
             assert_eq!(editor.text().line_str(0), "", "{keys}");
             assert_eq!(editor.window.top, 0, "{keys}");
         }
+    }
+
+    /// A directory tree for the listing tests: `dir/{b.txt, a.txt, sub/c.txt}`.
+    fn temp_tree(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("flux-explorer-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("b.txt"), "bee\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "ay\n").unwrap();
+        std::fs::write(dir.join("sub/c.txt"), "sea\n").unwrap();
+        dir
+    }
+
+    fn lines(editor: &Editor) -> Vec<String> {
+        let text = editor.text();
+        (0..text.line_count())
+            .map(|l| text.line_str(l).into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn browsing_a_directory() {
+        let dir = temp_tree("browse");
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&[".".into()]);
+        let mut engine = Engine::new();
+        assert!(editor.current_buffer().directory);
+        assert_eq!(lines(&editor), ["../", "sub/", "a.txt", "b.txt"]);
+        assert_eq!(editor.current_buffer().path.as_deref(), Some(dir.as_path()));
+        // Into a directory and a file, then back up with `-` and `:Ex`.
+        feed(&mut editor, &mut engine, "j<CR>");
+        assert_eq!(lines(&editor), ["../", "c.txt"]);
+        feed(&mut editor, &mut engine, "j<CR>");
+        assert_eq!(lines(&editor), ["sea"]);
+        assert_eq!(editor.current_buffer().name(), "sub/c.txt");
+        feed(&mut editor, &mut engine, ":Ex<CR>");
+        assert_eq!(lines(&editor), ["../", "c.txt"]);
+        assert_eq!(editor.cursor().line, 1, "on the file just left");
+        feed(&mut editor, &mut engine, "-");
+        assert_eq!(lines(&editor), ["../", "sub/", "a.txt", "b.txt"]);
+        assert_eq!(editor.cursor().line, 1, "on the directory just left");
+        // `../` goes up as well.
+        feed(&mut editor, &mut engine, "gg<CR>");
+        assert_eq!(editor.current_buffer().path.as_deref(), dir.parent());
+        // Listings are read again when shown, and aren't listed by `:ls`.
+        std::fs::write(dir.join("new.txt"), "").unwrap();
+        feed(
+            &mut editor,
+            &mut engine,
+            &format!(":e {}<CR>", dir.display()),
+        );
+        assert_eq!(lines(&editor), ["../", "sub/", "a.txt", "b.txt", "new.txt"]);
+        assert!(
+            editor
+                .listed_buffers()
+                .iter()
+                .all(|&b| !editor.buffer(b).unwrap().directory)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn listings_cannot_be_changed() {
+        let dir = temp_tree("readonly");
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&[".".into()]);
+        let mut engine = Engine::new();
+        let before = lines(&editor);
+        for keys in [
+            "dd",
+            "x",
+            "ixy<Esc>",
+            "Vjd",
+            "p",
+            ":%s/a/b/<CR>",
+            ":1d<CR>",
+            "J",
+        ] {
+            feed(&mut editor, &mut engine, keys);
+            assert_eq!(lines(&editor), before, "{keys}");
+            assert_eq!(editor.mode, Mode::Normal, "{keys}");
+        }
+        assert!(editor.message.as_ref().unwrap().text.starts_with("E21"));
+        feed(&mut editor, &mut engine, ":w<CR>");
+        assert!(editor.message.as_ref().unwrap().text.starts_with("E502"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_entries_in_splits() {
+        let dir = temp_tree("split");
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&["a.txt".into()]);
+        let mut engine = Engine::new();
+        feed(&mut editor, &mut engine, ":Vex<CR>");
+        assert_eq!(editor.window_ids().len(), 2);
+        assert_eq!(editor.cursor().line, 2, "on a.txt");
+        feed(&mut editor, &mut engine, "jo");
+        assert_eq!(editor.window_ids().len(), 3);
+        assert_eq!(lines(&editor), ["bee"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

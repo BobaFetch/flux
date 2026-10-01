@@ -2,6 +2,7 @@
 
 pub mod buffer;
 pub mod editor;
+pub mod explorer;
 pub mod layout;
 pub mod marks;
 pub mod options;
