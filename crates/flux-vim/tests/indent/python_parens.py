@@ -1,0 +1,45 @@
+result = compute(alpha,
+                 beta,
+                 gamma)
+other = compute(
+    alpha,
+    beta,
+)
+nested = outer(first(1,
+                     2),
+               second(
+                   3,
+               ),
+               4)
+items = [
+    1,
+    2,
+    [3,
+     4],
+]
+total = (1
+         + 2
+         + 3)
+value = 10
+mapping = {
+    "a": 1,
+    "b": (2, 3),
+    "c": "has ( in it",
+}
+call(x, "string with ) paren",
+     y)
+long = 1 + \
+    2 + \
+    3
+after = long
+def f(a,
+      b=None,
+      *args):
+    return a
+def g(
+    a,
+    b,
+):
+    x = [i for i in range(10)
+         if i % 2]
+    return x
