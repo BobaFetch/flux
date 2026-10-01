@@ -1,0 +1,5 @@
+:set cot+=noinsert
+keys: Enter
+GA
+keys: C-n
+keys: C-n

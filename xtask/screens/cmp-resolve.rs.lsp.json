@@ -1,0 +1,75 @@
+{
+ "capabilities": {
+  "textDocumentSync": {
+   "openClose": true,
+   "change": 2
+  },
+  "positionEncoding": "utf-8",
+  "completionProvider": {
+   "resolveProvider": true
+  }
+ },
+ "on": {
+  "textDocument/completion": {
+   "result": {
+    "isIncomplete": false,
+    "items": [
+     {
+      "label": "push",
+      "kind": 2,
+      "detail": "fn(&mut self, value: T)",
+      "data": 1
+     },
+     {
+      "label": "pop",
+      "kind": 2,
+      "detail": "fn(&mut self) -> Option<T>",
+      "data": 2,
+      "deprecated": true
+     },
+     {
+      "label": "print!",
+      "kind": 15,
+      "insertTextFormat": 2,
+      "insertText": "println!(\"${1:fmt}\", $2)$0",
+      "filterText": "print"
+     },
+     {
+      "label": "pos",
+      "kind": 5,
+      "labelDetails": {
+       "detail": ": usize",
+       "description": "field"
+      },
+      "additionalTextEdits": [
+       {
+        "range": {
+         "start": {
+          "line": 0,
+          "character": 0
+         },
+         "end": {
+          "line": 0,
+          "character": 0
+         }
+        },
+        "newText": "use std::pos;\n"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "completionItem/resolve": {
+   "result": {
+    "label": "push",
+    "kind": 2,
+    "detail": "fn(&mut self, value: T)",
+    "documentation": {
+     "kind": "markdown",
+     "value": "Appends an element to the **back** of a collection.\n\n# Panics\n\nPanics if the new capacity exceeds `isize::MAX` bytes."
+    }
+   }
+  }
+ }
+}

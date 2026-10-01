@@ -1,0 +1,6 @@
+:set cot+=noselect
+keys: Enter
+jjA
+keys: C-x
+keys: C-o
+l

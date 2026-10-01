@@ -1,0 +1,5 @@
+:sp cmp-keyword-other.txt
+keys: Enter
+keys: C-w j
+GA
+keys: C-n

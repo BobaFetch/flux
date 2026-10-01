@@ -83,12 +83,16 @@ impl std::fmt::Debug for Syntax {
     }
 }
 
-/// Feed `text` to the parser in rope chunks.
+/// Feed `text` to the parser in rope chunks. Like Neovim, the last line ends with a line
+/// break too (a Markdown code fence on the last line closes its block).
 fn parse(parser: &mut Parser, text: &Text, old: Option<&Tree>, deadline: Instant) -> Option<Tree> {
     let rope = text.rope();
     let len = rope.len_bytes();
     let mut input = |byte: usize, _: Point| -> &[u8] {
-        if byte >= len {
+        if byte == len {
+            return b"\n";
+        }
+        if byte > len {
             return &[];
         }
         let (chunk, start, _, _) = rope.chunk_at_byte(byte);

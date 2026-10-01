@@ -309,6 +309,25 @@ fn client_capabilities() -> Value {
                 "dataSupport": true
             },
             "hover": { "dynamicRegistration": false, "contentFormat": ["markdown", "plaintext"] },
+            "completion": {
+                "dynamicRegistration": false,
+                "completionItem": {
+                    "snippetSupport": true,
+                    "commitCharactersSupport": false,
+                    "preselectSupport": false,
+                    "deprecatedSupport": true,
+                    "documentationFormat": ["markdown", "plaintext"],
+                    "resolveSupport": { "properties": ["additionalTextEdits", "documentation"] },
+                    "insertReplaceSupport": true,
+                    "tagSupport": { "valueSet": [1] },
+                    "labelDetailsSupport": true
+                },
+                "completionItemKind": { "valueSet": (1..=25).collect::<Vec<_>>() },
+                "completionList": {
+                    "itemDefaults": ["editRange", "insertTextFormat", "insertTextMode", "data"]
+                },
+                "contextSupport": true
+            },
             "definition": { "linkSupport": true },
             "declaration": { "linkSupport": true },
             "typeDefinition": { "linkSupport": true },

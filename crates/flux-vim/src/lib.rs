@@ -2,6 +2,7 @@
 //! and write files.
 
 mod comments;
+mod completion;
 pub mod engine;
 pub mod ex;
 mod ex_lines;
@@ -17,6 +18,7 @@ pub mod parse;
 mod quickfix;
 mod search;
 mod set;
+mod snippet;
 mod substitute;
 pub mod textobj;
 mod util;

@@ -130,6 +130,8 @@ pub struct Editor {
     pub floats: Vec<crate::float::Float>,
     /// Quickfix and location lists, and the tag stacks (see [`crate::quickfix`]).
     pub quickfix: crate::quickfix::QuickfixState,
+    /// Insert-mode completion's menu and mode message (see [`crate::pum`]).
+    pub completion: crate::pum::CompletionView,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
@@ -226,6 +228,7 @@ impl Editor {
             lsp: Default::default(),
             floats: Vec::new(),
             quickfix: Default::default(),
+            completion: Default::default(),
             registers: Registers::default(),
             hit_enter: false,
             more_top: None,

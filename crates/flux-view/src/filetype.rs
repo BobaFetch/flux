@@ -172,6 +172,7 @@ impl Editor {
         let shown: Vec<BufferId> = std::iter::once(self.window.buffer)
             .chain(self.windows.iter().map(|w| w.buffer))
             .chain(self.floats.iter().map(|f| f.buffer))
+            .chain(self.pum_info_buffer())
             .collect();
         let mut pending = false;
         for buffer in self.buffers.iter_mut().filter(|b| shown.contains(&b.id)) {

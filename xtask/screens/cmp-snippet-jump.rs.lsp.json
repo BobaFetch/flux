@@ -1,0 +1,27 @@
+{
+ "capabilities": {
+  "textDocumentSync": {
+   "openClose": true,
+   "change": 2
+  },
+  "completionProvider": {}
+ },
+ "on": {
+  "textDocument/completion": {
+   "result": [
+    {
+     "label": "if",
+     "kind": 15,
+     "insertTextFormat": 2,
+     "insertText": "if ${1:cond} {\n\t$0\n}"
+    },
+    {
+     "label": "ifl",
+     "kind": 15,
+     "insertTextFormat": 2,
+     "insertText": "if let ${1:pat} = ${2:expr} {\n\t${1}\n}$0"
+    }
+   ]
+  }
+ }
+}
