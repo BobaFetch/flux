@@ -17,6 +17,8 @@ impl Engine {
             LspCmd::DiagnosticFirst => diagnostic_jump(editor, -isize::MAX, false),
             LspCmd::DiagnosticFloat => diagnostic_float(editor),
             LspCmd::Hover => super::hover::request(editor),
+            LspCmd::Rename => super::rename::start(self, editor),
+            LspCmd::CodeAction => super::code_action::request(editor),
             _ => {}
         }
     }

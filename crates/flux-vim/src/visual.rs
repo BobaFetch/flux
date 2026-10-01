@@ -190,6 +190,8 @@ impl Engine {
                 }
             }
             VisualAction::Exit => self.exit_visual(editor),
+            // Neovim's mapping runs in Visual mode, which goes on.
+            VisualAction::CodeAction => crate::lsp::code_action::request(editor),
             VisualAction::CmdLine => {
                 self.exit_visual(editor);
                 self.enter_cmdline(editor);

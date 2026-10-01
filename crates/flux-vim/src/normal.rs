@@ -334,6 +334,13 @@ impl Engine {
             }
         };
         let range = op_range(editor, op, cur, t);
+        if matches!(op, Operator::Format | Operator::FormatKeep) {
+            // An exclusive motion ending in column 0 left out its last line (`gq}`).
+            let end_adjusted = range.end.line < cur.line.max(t.pos.line);
+            self.format_op(editor, range, op == Operator::FormatKeep, cur, end_adjusted);
+            editor.window.set_curswant = true;
+            return true;
+        }
         self.apply_operator(editor, op, range, register);
         true
     }
@@ -346,6 +353,7 @@ impl Engine {
         range: Range,
         register: Option<char>,
     ) {
+        let cursor_start = editor.cursor();
         // Vim puts the cursor at the start of the text before operating on it, which is also
         // where undo returns to.
         if op != Operator::Yank {
@@ -365,6 +373,15 @@ impl Engine {
                 self.change_case(editor, range, op)
             }
             Operator::Reindent => self.reindent(editor, range.start.line, range.end.line),
+            Operator::Format | Operator::FormatKeep => {
+                self.format_op(
+                    editor,
+                    range,
+                    op == Operator::FormatKeep,
+                    cursor_start,
+                    false,
+                );
+            }
         }
         // Like Vim, the column to aim for is recomputed from wherever the operator leaves the
         // cursor, at the next vertical move.

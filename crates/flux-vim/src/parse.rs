@@ -20,6 +20,10 @@ pub enum Operator {
     ToggleCase,
     /// `=`: reindent lines.
     Reindent,
+    /// `gq`: format lines ('formatexpr', or to 'textwidth').
+    Format,
+    /// `gw`: format lines to 'textwidth', keeping the cursor on its text.
+    FormatKeep,
 }
 
 impl Operator {
@@ -441,6 +445,8 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
                 Some('~') => operator(k, Operator::ToggleCase, '~', &mut count)?,
                 Some('u') => operator(k, Operator::Lowercase, 'u', &mut count)?,
                 Some('U') => operator(k, Operator::Uppercase, 'U', &mut count)?,
+                Some('q') => operator(k, Operator::Format, 'q', &mut count)?,
+                Some('w') => operator(k, Operator::FormatKeep, 'w', &mut count)?,
                 Some('J') => Some(Action::Join { spaces: false }),
                 Some('I') => Some(Action::Insert(InsertAt::LineStart)),
                 Some('v') => Some(Action::Reselect),
@@ -496,7 +502,11 @@ fn operator(
     let key = k.next()?;
     let is_g_op = matches!(
         op,
-        Operator::ToggleCase | Operator::Lowercase | Operator::Uppercase
+        Operator::ToggleCase
+            | Operator::Lowercase
+            | Operator::Uppercase
+            | Operator::Format
+            | Operator::FormatKeep
     );
     if key.typed_char() == Some(repeat) {
         return Ok(Some(Action::Operate(op, OpTarget::Lines)));
@@ -715,6 +725,8 @@ pub enum VisualAction {
     CmdLine,
     Scroll(Scroll),
     SetMark(char),
+    /// `gra`: code actions for the selection.
+    CodeAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -817,6 +829,12 @@ fn parse_visual_command(k: &mut Keys) -> Result<ParsedVisual, NeedMore> {
                 Some('~') => Some(V::Operate(Operator::ToggleCase)),
                 Some('u') => Some(V::Operate(Operator::Lowercase)),
                 Some('U') => Some(V::Operate(Operator::Uppercase)),
+                Some('q') => Some(V::Operate(Operator::Format)),
+                Some('w') => Some(V::Operate(Operator::FormatKeep)),
+                Some('r') => match k.next()?.typed_char() {
+                    Some('a') => Some(V::CodeAction),
+                    _ => None,
+                },
                 Some(c) => g_motion(c).map(V::Move),
                 None => None,
             },
@@ -883,7 +901,7 @@ mod tests {
         for keys in ["", "d", "2d3", "\"", "g", "f", "dt", "gu", "gug", "Z", "r"] {
             assert_eq!(parse(&parse_keys(keys), false), Parse::Incomplete, "{keys}");
         }
-        for keys in ["dz", "Q", "d<Esc>", "f<Esc>", "\"=", "gq", "<Esc>", "dis"] {
+        for keys in ["dz", "Q", "d<Esc>", "f<Esc>", "\"=", "gx", "<Esc>", "dis"] {
             assert_eq!(parse(&parse_keys(keys), false), Parse::Invalid, "{keys}");
         }
     }

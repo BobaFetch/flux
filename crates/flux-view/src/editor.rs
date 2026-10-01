@@ -103,8 +103,11 @@ pub struct Editor {
     pub mode: Mode,
     /// Text typed on the command line, after its `cmdline_kind` character.
     pub cmdline: String,
-    /// `:` for an Ex command, `/` or `?` for a search.
+    /// `:` for an Ex command, `/` or `?` for a search, `@` for `input()` (after
+    /// `cmdline_prompt`).
     pub cmdline_kind: char,
+    /// The prompt `input()` shows before what's typed.
+    pub cmdline_prompt: String,
     /// The cursor on the command line, as a char index into `cmdline`.
     pub cmdline_pos: usize,
     /// The mode the command line returns to (Visual for a search typed in Visual mode).
@@ -131,6 +134,12 @@ pub struct Editor {
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
+    /// The line below such a message when it asks for a number (`inputlist()`), with what's
+    /// typed so far, instead of the hit-enter prompt.
+    pub number_prompt: Option<String>,
+    /// Lines still on screen above the message (the list a number was typed for), shown
+    /// before it at the hit-enter prompt.
+    pub message_above: Option<String>,
     /// Paging through a long message (`-- More --`): the first row shown.
     pub more_top: Option<usize>,
     /// A key the pager doesn't know was typed: show its keys.
@@ -208,6 +217,7 @@ impl Editor {
             mode: Mode::Normal,
             cmdline: String::new(),
             cmdline_kind: ':',
+            cmdline_prompt: String::new(),
             cmdline_pos: 0,
             cmdline_return: Mode::Normal,
             incsearch: None,
@@ -222,6 +232,8 @@ impl Editor {
             floats: Vec::new(),
             registers: Registers::default(),
             hit_enter: false,
+            number_prompt: None,
+            message_above: None,
             more_top: None,
             more_help: false,
             keep_msg: false,
@@ -921,6 +933,7 @@ impl Editor {
         // Anything longer than one line waits for a key.
         self.hit_enter = text.contains('\n') || wraps;
         self.message = Some(Message { text, kind });
+        self.message_above = None;
         self.kept_message = None;
         self.message_positions.clear();
         self.more_max_row = 0;

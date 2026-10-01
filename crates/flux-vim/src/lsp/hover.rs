@@ -66,7 +66,7 @@ fn split_lines(s: &str, no_blank: bool) -> Vec<String> {
 
 /// Neovim's `convert_input_to_markdown_lines`: hover contents (MarkupContent, MarkedString,
 /// or a list of MarkedStrings) as Markdown lines.
-fn markdown_lines(input: &Value, out: &mut Vec<String>) {
+pub(crate) fn markdown_lines(input: &Value, out: &mut Vec<String>) {
     match input {
         Value::String(s) => out.extend(split_lines(s, true)),
         Value::Object(o) if o.contains_key("kind") => {
@@ -104,7 +104,7 @@ fn has_content(contents: &Value) -> bool {
 
 /// Neovim's `_normalize_markdown`: no carriage returns or leading and trailing blank lines,
 /// runs of blank lines as one, and thematic breaks (`---`) as a line of `─` `width` long.
-fn normalize(lines: Vec<String>, width: usize) -> Vec<String> {
+pub(crate) fn normalize(lines: Vec<String>, width: usize) -> Vec<String> {
     let joined = lines.join("\n").replace('\r', "");
     let mut lines: Vec<String> = joined.split('\n').map(str::to_owned).collect();
     while lines.first().is_some_and(String::is_empty) {

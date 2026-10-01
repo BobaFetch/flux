@@ -157,6 +157,9 @@ const COMMANDS: &[Command] = &[
     cmd("files", 5, list_buffers),
     cmd("filetype", 5, filetype),
     cmd("syntax", 2, syntax),
+    cmd("lsp", 3, |editor, a| {
+        crate::lsp::ex_lsp::lsp(editor, a.args)
+    }),
     ecmd("delete", 1, ex_lines::delete)
         .lines()
         .count()

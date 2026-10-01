@@ -353,7 +353,7 @@ impl Pane<'_> {
                 .collect();
         }
         let text = &self.buffer().text;
-        let typing = editor.mode == Mode::CmdLine && editor.cmdline_kind != ':';
+        let typing = editor.mode == Mode::CmdLine && !matches!(editor.cmdline_kind, ':' | '@');
         let incsearch = if typing && self.is_current() {
             editor.incsearch
         } else {
@@ -875,7 +875,12 @@ fn draw_cmdline(
 ) -> Option<(usize, usize)> {
     match editor.mode {
         Mode::CmdLine => {
-            let line = format!("{}{}", editor.cmdline_kind, editor.cmdline);
+            // `input()` shows its prompt instead of a command line's type.
+            let head = match editor.cmdline_kind {
+                '@' => editor.cmdline_prompt.clone(),
+                kind => kind.to_string(),
+            };
+            let line = format!("{head}{}", editor.cmdline);
             let width = grid.width().max(1);
             // A command line too long for one row takes more, growing upward over the
             // screen with a blank row above it (Neovim's 'msgsep').
@@ -889,7 +894,10 @@ fn draw_cmdline(
             for (row, piece) in (first..).zip(flux_view::editor::wrap(&line, width)) {
                 grid.put_str(0, row, &piece, Style::default());
             }
-            let before: String = line.chars().take(editor.cmdline_pos + 1).collect();
+            let before: String = line
+                .chars()
+                .take(editor.cmdline_pos + head.chars().count())
+                .collect();
             let x = UnicodeWidthStr::width(before.as_str());
             Some((x % width, (first + x / width).min(y)))
         }
@@ -995,21 +1003,39 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
         let end = grid.put_str(0, height - 1, prompt, prompt_style);
         return Some((end.min(grid.width() - 1), height - 1));
     }
-    let rows = (lines.len() + 2).min(height);
+    // What was on the command line before the message (a list and the answer typed to it)
+    // stays above it.
+    let width = grid.width().max(1);
+    let mut styled: Vec<(&str, Style)> = Vec::new();
+    let above: Vec<String> = editor
+        .message_above
+        .as_deref()
+        .map(|a| {
+            a.lines()
+                .flat_map(|l| flux_view::editor::wrap(l, width))
+                .collect()
+        })
+        .unwrap_or_default();
+    styled.extend(above.iter().map(|l| (l.as_str(), Style::default())));
+    styled.extend(lines.iter().map(|l| (*l, style)));
+    let rows = (styled.len() + 2).min(height);
     let first = height - rows;
     for y in first..height {
         grid.fill_row(y, Style::default());
     }
     let shown = rows.saturating_sub(2);
-    for (i, line) in lines[lines.len() - shown..].iter().enumerate() {
-        grid.put_str(0, first + 1 + i, line, style);
+    for (i, (line, style)) in styled[styled.len() - shown..].iter().enumerate() {
+        grid.put_str(0, first + 1 + i, line, *style);
     }
-    let end = grid.put_str(
-        0,
-        height - 1,
-        "Press ENTER or type command to continue",
-        theme.question,
-    );
+    let end = match &editor.number_prompt {
+        Some(prompt) => grid.put_str(0, height - 1, prompt, Style::default()),
+        None => grid.put_str(
+            0,
+            height - 1,
+            "Press ENTER or type command to continue",
+            theme.question,
+        ),
+    };
     Some((end.min(grid.width() - 1), height - 1))
 }
 

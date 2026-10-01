@@ -9,8 +9,13 @@ use serde_json::{Value, json};
 
 use crate::engine::Engine;
 
+pub(crate) mod code_action;
 mod commands;
+pub(crate) mod edits;
+pub(crate) mod ex_lsp;
 mod hover;
+pub(crate) mod rename;
+pub(crate) mod signature;
 
 /// Something a server sent.
 pub fn handle_message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Value) {
@@ -48,6 +53,9 @@ fn message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Valu
                 }
                 return;
             }
+            if edits::answer(engine, editor, client, &pending, &msg) {
+                return;
+            }
             match msg.get("error") {
                 Some(error) => response_error(editor, client, &pending, error),
                 None => response(engine, editor, client, pending, &msg["result"]),
@@ -68,6 +76,7 @@ pub fn handle_exit(editor: &mut Editor, client: ClientId, why: &str) {
     if !expected {
         editor.error(format!("Client {name} quit: {why}"));
     }
+    ex_lsp::exited(editor, client);
 }
 
 fn server_request(editor: &mut Editor, client: ClientId, method: &str, id: Value, params: &Value) {
@@ -179,9 +188,11 @@ fn response(
 
 /// All the servers asked have answered.
 fn group_done(engine: &mut Engine, editor: &mut Editor, group: flux_view::lsp::Group) {
-    let _ = engine;
-    if group.method.as_str() == "textDocument/hover" {
-        hover::show(editor, group);
+    match group.method.as_str() {
+        "textDocument/hover" => hover::show(editor, group),
+        "textDocument/codeAction" => code_action::show(engine, editor, group),
+        "textDocument/signatureHelp" => signature::show(editor, group),
+        _ => {}
     }
 }
 

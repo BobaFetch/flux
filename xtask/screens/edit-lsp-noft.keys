@@ -1,0 +1,4 @@
+:lsp enable
+keys: Enter
+:lsp foo
+keys: Enter

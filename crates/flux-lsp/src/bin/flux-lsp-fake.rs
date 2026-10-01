@@ -16,8 +16,8 @@
 //!
 //! An entry may have `result` or `error` (for a request) and `send`: messages to send after it
 //! (notifications, or requests with an `id`). A list of entries is used in turn, the last one
-//! from then on. In everything sent, `"$URI"` becomes the triggering message's document URI and
-//! `"$ROOT"` the root URI.
+//! from then on. In everything sent (values and keys), `"$URI"` becomes the triggering message's
+//! document URI (or the last one seen) and `"$ROOT"` the root URI.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -59,7 +59,10 @@ fn fill(v: &Value, uri: &str, root: &str) -> Value {
         Value::Array(a) => Value::Array(a.iter().map(|x| fill(x, uri, root)).collect()),
         Value::Object(o) => Value::Object(
             o.iter()
-                .map(|(k, x)| (k.clone(), fill(x, uri, root)))
+                .map(|(k, x)| {
+                    let k = k.replace("$URI", uri).replace("$ROOT", root);
+                    (k, fill(x, uri, root))
+                })
                 .collect(),
         ),
         other => other.clone(),
@@ -81,6 +84,7 @@ fn main() {
     });
     let mut uses: HashMap<String, usize> = HashMap::new();
     let mut root = String::new();
+    let mut last_uri = String::new();
     let stdin = std::io::stdin();
     let mut input = BufReader::new(stdin.lock());
     let mut out = std::io::stdout().lock();
@@ -96,10 +100,11 @@ fn main() {
         if method == "initialize" {
             root = msg["params"]["rootUri"].as_str().unwrap_or("").to_string();
         }
-        let uri = msg["params"]["textDocument"]["uri"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        // A message without a document (`codeAction/resolve`) is about the last one seen.
+        if let Some(u) = msg["params"]["textDocument"]["uri"].as_str() {
+            last_uri = u.to_string();
+        }
+        let uri = last_uri.clone();
         let entry = match &script["on"][&method] {
             Value::Array(list) if !list.is_empty() => {
                 let n = uses.entry(method.clone()).or_insert(0);

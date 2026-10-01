@@ -1,0 +1,6 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8", "renameProvider": { "prepareProvider": true } },
+  "on": {
+    "textDocument/prepareRename": { "error": { "code": -32602, "message": "No references found at position" } }
+  }
+}
