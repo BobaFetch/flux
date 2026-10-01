@@ -5,7 +5,6 @@ use flux_view::{Editor, Mode, Register, RegisterKind};
 
 use crate::engine::{Dot, Engine};
 use crate::ex;
-use crate::indent::{self, Typed, When};
 use crate::insert::InsertKind;
 use crate::motion::{self, Context, Kind, Motion, Pending, Target, Want};
 use crate::parse::{Action, Command, InsertAt, OpTarget, Operator, Scroll};
@@ -663,12 +662,25 @@ impl Engine {
         }
         let mut joined = util::line(editor, cur.line);
         let mut col = 0;
+        // 'formatoptions' `j`: a comment leader goes when joining a comment line onto another
+        // (Vim's `skip_comment`).
+        let com = editor.buf_opts().comments.clone();
+        let remove_comments = editor.buf_opts().formatoptions.contains('j');
+        let mut prev_was_comment =
+            remove_comments && crate::comments::skip_comment(&com, &joined, false, spaces).1;
         for l in cur.line + 1..cur.line + n {
-            let s = util::line(editor, l);
+            let line = util::line(editor, l);
+            let mut s = line.as_str();
+            if remove_comments {
+                let (skip, is_comment) =
+                    crate::comments::skip_comment(&com, s, prev_was_comment, spaces);
+                prev_was_comment = is_comment;
+                s = &s[skip..];
+            }
             let next = if spaces {
                 s.trim_start_matches([' ', '\t'])
             } else {
-                s.as_str()
+                s
             };
             let insert_space = spaces
                 && !next.is_empty()
@@ -722,6 +734,7 @@ impl Engine {
         let s = util::line(editor, cur.line);
         let len = s.chars().count();
         let mut ai_line = None;
+        let mut end_comment = None;
         editor.window.cursor.col = match at {
             InsertAt::Cursor => cur.col,
             InsertAt::After => {
@@ -735,50 +748,22 @@ impl Engine {
             InsertAt::LineStart => 0,
             InsertAt::LineEnd => len,
             InsertAt::OpenBelow | InsertAt::OpenAbove => {
-                let line = self.open_line(editor, at == InsertAt::OpenBelow);
-                let indent = editor.cursor().col;
-                ai_line = (indent > 0).then_some(line);
-                indent
+                let opened = self.open_line_vim(
+                    editor,
+                    crate::open_line::OpenFlags {
+                        backward: at == InsertAt::OpenAbove,
+                        ..Default::default()
+                    },
+                );
+                ai_line = opened.did_ai.then_some(opened.line);
+                end_comment = opened.end_comment_pending;
+                editor.cursor().col
             }
         };
         self.begin_insert(editor, InsertKind::Plain(at), count, ai_line);
-        // The new line's indent comes from the indenter ('indentkeys' `o` and `O`).
-        let open = match at {
-            InsertAt::OpenBelow => Some(Typed::OpenBelow),
-            InsertAt::OpenAbove => Some(Typed::OpenAbove),
-            _ => None,
-        };
-        if let Some(typed) = open
-            && indent::cindent_on(editor)
-            && indent::in_cinkeys(editor, typed, When::After, util::in_indent(&s, cur.col))
-        {
-            self.fix_this_line(editor);
+        if let Some(ins) = self.insert.as_mut() {
+            ins.end_comment_pending = end_comment;
         }
-    }
-
-    /// Open a new line below or above the cursor with the current line's indent, put the cursor
-    /// on it and return its number.
-    pub(crate) fn open_line(&mut self, editor: &mut Editor, below: bool) -> usize {
-        let cur = editor.cursor();
-        let s = util::line(editor, cur.line);
-        let indent = if editor.buf_opts().autoindent {
-            util::indent_of(&s).to_string()
-        } else {
-            String::new()
-        };
-        let t = editor.text();
-        let (edit, line) = if below {
-            let end = t.line_start(cur.line) + t.line_len(cur.line);
-            (Edit::insert(end, format!("\n{indent}")), cur.line + 1)
-        } else {
-            (
-                Edit::insert(t.line_start(cur.line), format!("{indent}\n")),
-                cur.line,
-            )
-        };
-        self.edit(editor, edit);
-        editor.window.cursor = pos(line, indent.chars().count());
-        line
     }
 }
 
@@ -1037,12 +1022,12 @@ impl Engine {
         count: usize,
         ai_line: Option<usize>,
     ) {
-        self.insert = Some(crate::insert::Insert::new(
-            kind,
-            count,
-            editor.cursor(),
-            ai_line,
-        ));
+        let mut ins = crate::insert::Insert::new(kind, count, editor.cursor(), ai_line);
+        let cur = editor.cursor();
+        ins.start_textlen = editor
+            .metrics()
+            .vcol_of(cur.line, editor.text().line_len(cur.line));
+        self.insert = Some(ins);
         editor.mode = Mode::Insert;
         editor.message = None;
     }

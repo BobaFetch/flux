@@ -8,7 +8,7 @@ use flux_view::Editor;
 use flux_vim::{Engine, parse_keys};
 use serde_json::Value;
 
-const MILESTONE: u64 = 4;
+const MILESTONE: u64 = 5;
 /// Neovim's headless screen; the text area is 80x22 once the statusline and command line are
 /// taken.
 const SCREEN: (usize, usize) = (80, 24);

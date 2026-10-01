@@ -398,22 +398,18 @@ impl Engine {
         true
     }
 
-    /// Vim's `do_c_expr_indent`: reindent the cursor line as the indenter says. A line left
-    /// with only its indent loses it again if nothing is typed (Vim's `did_ai`).
-    pub(crate) fn fix_this_line(&mut self, editor: &mut Editor) {
+    /// Vim's `do_c_expr_indent`: reindent the cursor line as the indenter says. Returns whether
+    /// the line is left holding only its indent, which goes again if nothing is typed (Vim's
+    /// `fixthisline` setting `did_ai`).
+    pub(crate) fn fix_this_line(&mut self, editor: &mut Editor) -> bool {
         editor.update_syntax();
         let lnum = editor.cursor().line;
         let Some(amount) = get_indent(editor, lnum) else {
-            return;
+            return false;
         };
         self.set_line_indent(editor, lnum, amount);
         let s = util::line(editor, lnum);
-        if !s.is_empty()
-            && s.chars().all(util::is_white)
-            && let Some(ins) = self.insert.as_mut()
-        {
-            ins.ai_line = Some(lnum);
-        }
+        !s.is_empty() && s.chars().all(util::is_white)
     }
 
     /// The `=` operator on lines `first..=last` (Vim's `op_reindent`): each line gets the

@@ -1074,6 +1074,50 @@ mod tests {
     }
 
     #[test]
+    fn filetype_and_syntax_commands() {
+        let mut editor = Editor::new(80, 24);
+        let mut engine = Engine::new();
+        let msg = |e: &Editor| {
+            e.message
+                .as_ref()
+                .map(|m| m.text.clone())
+                .unwrap_or_default()
+        };
+        feed(&mut editor, &mut engine, ":filetype<CR>");
+        assert_eq!(msg(&editor), "filetype detection:ON  plugin:ON  indent:ON");
+        feed(
+            &mut editor,
+            &mut engine,
+            ":filetype indent off<CR>:filetype<CR>",
+        );
+        assert_eq!(msg(&editor), "filetype detection:ON  plugin:ON  indent:OFF");
+        feed(
+            &mut editor,
+            &mut engine,
+            ":filetype plugin indent on<CR>:filetype off<CR>:filet<CR>",
+        );
+        assert_eq!(
+            msg(&editor),
+            "filetype detection:OFF  plugin:(on)  indent:(on)"
+        );
+        feed(&mut editor, &mut engine, ":filetype bogus<CR>");
+        assert_eq!(msg(&editor), "E475: Invalid argument: bogus");
+        feed(&mut editor, &mut engine, ":syntax<CR>");
+        assert_eq!(msg(&editor), "No Syntax items defined for this buffer");
+        feed(&mut editor, &mut engine, ":syntax bogus<CR>");
+        assert_eq!(msg(&editor), "E410: Invalid :syntax subcommand: bogus");
+        feed(&mut editor, &mut engine, ":syntax off<CR>");
+        assert!(!editor.syntax_on);
+        feed(&mut editor, &mut engine, ":sy on<CR>");
+        assert!(editor.syntax_on);
+        // Setting 'filetype' applies the filetype's settings (Vim's FileType event).
+        feed(&mut editor, &mut engine, ":set ft=rust<CR>");
+        assert_eq!(editor.buf_opts().shiftwidth, 4);
+        assert!(editor.buf_opts().expandtab);
+        assert_eq!(editor.buf_opts().indentexpr, "GetRustIndent(v:lnum)");
+    }
+
+    #[test]
     fn alt_key_is_escape_then_key() {
         let mut editor = Editor::new(80, 24);
         editor.set_text("abc\n");

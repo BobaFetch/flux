@@ -22,106 +22,94 @@ impl Default for FiletypeSettings {
     }
 }
 
-/// The options Neovim's ftplugins and indent scripts set (`nvim --clean`, each filetype's
-/// recommended style), on top of the global values.
-fn ftplugin(filetype: &str, opts: &mut BufferOptions) {
+/// The options Neovim's ftplugins set (`nvim --clean`, each filetype's recommended style).
+fn ftplugin(filetype: &str, o: &mut BufferOptions) {
     let c_comments = "sO:* -,mO:*  ,exO:*/,s1:/*,mb:*,ex:*/,:///,://";
     let js_comments = "sO:* -,mO:*  ,exO:*/,s1:/*,mb:*,ex:*/,://";
-    let set = |o: &mut BufferOptions, inde: &str, indk: Option<&str>, com: &str, fo: &str| {
-        o.indentexpr = inde.into();
-        if let Some(k) = indk {
-            o.indentkeys = k.into();
-        }
-        o.comments = com.into();
-        o.formatoptions = fo.into();
+    let mut style = |ts: usize, sw: usize, sts: isize| {
+        o.tabstop = ts;
+        o.shiftwidth = sw;
+        o.softtabstop = sts;
+        o.expandtab = true;
     };
     match filetype {
-        "text" => set(opts, "", None, "fb:-,fb:*,n:>", "tcqj"),
         "rust" => {
-            opts.shiftwidth = 4;
-            opts.softtabstop = 4;
-            opts.expandtab = true;
-            opts.textwidth = 100;
-            opts.cindent = true;
-            opts.cinoptions = "L0,(s,Ws,J1,j1,m1".into();
-            opts.cinkeys = "0{,0},!^F,o,O,0[,0],0(,0)".into();
-            opts.cinwords =
+            style(8, 4, 4);
+            o.textwidth = 100;
+            o.matchpairs = "(:),{:},[:],<:>".into();
+        }
+        "python" => style(4, 4, 4),
+        "markdown" => {
+            style(4, 4, 4);
+            o.matchpairs = "(:),{:},[:],<:>".into();
+        }
+        _ => {}
+    }
+    let (comments, formatoptions) = match filetype {
+        "text" => ("fb:-,fb:*,n:>", "tcqj"),
+        "rust" => ("s0:/*!,ex:*/,s1:/*,mb:*,ex:*/,:///,://!,://", "croqnlj"),
+        "python" => ("b:#,fb:-", "tcqj"),
+        "lua" => (":---,:--", "jcroql"),
+        "toml" => (":#", "tcqj"),
+        "json" => ("", "cqj"),
+        "markdown" => ("fb:*,fb:-,fb:+,n:>", "jtcqln"),
+        "sh" => ("b:#", "jcroql"),
+        "javascript" | "javascriptreact" | "typescript" | "typescriptreact" => {
+            (js_comments, "jcroql")
+        }
+        "c" | "cpp" => (c_comments, "jcroql"),
+        _ => return,
+    };
+    o.comments = comments.into();
+    o.formatoptions = formatoptions.into();
+}
+
+/// The options Neovim's indent scripts set: which indenter, and the keys that trigger it.
+fn indent_plugin(filetype: &str, o: &mut BufferOptions) {
+    let (expr, keys): (&str, Option<&str>) = match filetype {
+        "rust" => {
+            o.cindent = true;
+            o.cinoptions = "L0,(s,Ws,J1,j1,m1".into();
+            o.cinkeys = "0{,0},!^F,o,O,0[,0],0(,0)".into();
+            o.cinwords =
                 "for,if,else,while,loop,impl,mod,unsafe,trait,struct,enum,fn,extern,macro".into();
-            opts.matchpairs = "(:),{:},[:],<:>".into();
-            set(
-                opts,
-                "GetRustIndent(v:lnum)",
-                Some("0{,0},!^F,o,O,0[,0],0(,0)"),
-                "s0:/*!,ex:*/,s1:/*,mb:*,ex:*/,:///,://!,://",
-                "croqnlj",
-            );
+            ("GetRustIndent(v:lnum)", Some("0{,0},!^F,o,O,0[,0],0(,0)"))
         }
         "python" => {
-            opts.tabstop = 4;
-            opts.shiftwidth = 4;
-            opts.softtabstop = 4;
-            opts.expandtab = true;
-            set(
-                opts,
+            o.cinkeys = "0{,0},0),0],:,!^F,o,O,e".into();
+            (
                 "python#GetIndent(v:lnum)",
                 Some("0{,0},0),0],:,!^F,o,O,e,<:>,=elif,=except"),
-                "b:#,fb:-",
-                "tcqj",
-            );
-            opts.cinkeys = "0{,0},0),0],:,!^F,o,O,e".into();
+            )
         }
-        "lua" => set(
-            opts,
+        "lua" => (
             "GetLuaIndent()",
             Some("0{,0},0),0],:,0#,!^F,o,O,e,0=end,0=until"),
-            ":---,:--",
-            "jcroql",
         ),
-        "toml" => set(opts, "", None, ":#", "tcqj"),
-        "json" => set(
-            opts,
-            "GetJSONIndent(v:lnum)",
-            Some("0{,0},0),0[,0],!^F,o,O,e"),
-            "",
-            "cqj",
-        ),
-        "markdown" => {
-            opts.tabstop = 4;
-            opts.shiftwidth = 4;
-            opts.softtabstop = 4;
-            opts.expandtab = true;
-            opts.matchpairs = "(:),{:},[:],<:>".into();
-            set(opts, "", None, "fb:*,fb:-,fb:+,n:>", "jtcqln");
-        }
-        "sh" => set(
-            opts,
+        "json" => ("GetJSONIndent(v:lnum)", Some("0{,0},0),0[,0],!^F,o,O,e")),
+        "sh" => (
             "GetShIndent()",
             Some(
                 "0{,0},0),0],!^F,o,O,e,0=then,0=do,0=else,0=elif,0=fi,0=esac,0=done,0=end,),\
                  0=;;,0=;&,0=fin,0=fil,0=fip,0=fir,0=fix",
             ),
-            "b:#",
-            "jcroql",
         ),
-        "javascript" | "javascriptreact" => set(
-            opts,
+        "javascript" | "javascriptreact" => (
             "GetJavascriptIndent()",
             Some("0{,0},0),0],:,0#,!^F,o,O,e,0],0)"),
-            js_comments,
-            "jcroql",
         ),
-        "typescript" | "typescriptreact" => set(
-            opts,
-            "GetTypescriptIndent()",
-            Some("0{,0},0),0],0,,!^F,o,O,e"),
-            js_comments,
-            "jcroql",
-        ),
-        "c" | "cpp" => {
-            opts.cindent = true;
-            set(opts, "", None, c_comments, "jcroql");
+        "typescript" | "typescriptreact" => {
+            ("GetTypescriptIndent()", Some("0{,0},0),0],0,,!^F,o,O,e"))
         }
-        _ => {}
+        "c" | "cpp" => {
+            o.cindent = true;
+            ("", None)
+        }
+        _ => return,
+    };
+    o.indentexpr = expr.into();
+    if let Some(k) = keys {
+        o.indentkeys = k.into();
     }
 }
 
@@ -150,13 +138,16 @@ impl Editor {
     /// 'filetype' of buffer `id` was set (Vim's FileType event): apply its ftplugin settings
     /// and switch to its parser.
     pub fn apply_filetype(&mut self, id: BufferId) {
-        let plugin = self.filetype.plugin;
+        let FiletypeSettings { plugin, indent, .. } = self.filetype;
         let Some(buffer) = self.buffer_mut(id) else {
             return;
         };
         let ft = buffer.opts.filetype.clone();
         if plugin {
             ftplugin(&ft, &mut buffer.opts);
+        }
+        if indent {
+            indent_plugin(&ft, &mut buffer.opts);
         }
         let lang = flux_syntax::lang_for_filetype(&ft);
         if buffer.syntax.as_ref().map(|s| s.lang()) != lang {

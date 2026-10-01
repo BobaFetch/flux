@@ -155,6 +155,8 @@ const COMMANDS: &[Command] = &[
     cmd("ls", 2, list_buffers),
     cmd("buffers", 7, list_buffers),
     cmd("files", 5, list_buffers),
+    cmd("filetype", 5, filetype),
+    cmd("syntax", 2, syntax),
     ecmd("delete", 1, ex_lines::delete)
         .lines()
         .count()
@@ -854,6 +856,72 @@ fn edit(editor: &mut Editor, a: &Args) {
     }
     if let Err(e) = editor.edit_file(&PathBuf::from(args)) {
         editor.error(e);
+    }
+}
+
+/// `:filetype [plugin] [indent] on|off`, `:filetype detect`, and `:filetype` to show the
+/// settings.
+fn filetype(editor: &mut Editor, a: &Args) {
+    let words: Vec<&str> = a.args.split_whitespace().collect();
+    let ft = &mut editor.filetype;
+    match words.as_slice() {
+        [] => {
+            let show = |on: bool| {
+                if !ft.detection {
+                    if on { "(on)" } else { "(off)" }
+                } else if on {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+            };
+            let msg = format!(
+                "filetype detection:{}  plugin:{}  indent:{}",
+                if ft.detection { "ON" } else { "OFF" },
+                show(ft.plugin),
+                show(ft.indent)
+            );
+            editor.info(msg);
+        }
+        ["detect"] => {
+            let id = editor.window.buffer;
+            editor.detect_filetype(id);
+        }
+        [flags @ .., last @ ("on" | "off")] => {
+            let on = *last == "on";
+            if flags.iter().any(|f| !matches!(*f, "plugin" | "indent")) {
+                let bad = flags.iter().find(|f| !matches!(**f, "plugin" | "indent"));
+                editor.error(format!("E475: Invalid argument: {}", bad.unwrap_or(&"")));
+                return;
+            }
+            if flags.is_empty() {
+                ft.detection = on;
+            }
+            for f in flags {
+                if on {
+                    ft.detection = true;
+                }
+                match *f {
+                    "plugin" => ft.plugin = on,
+                    _ => ft.indent = on,
+                }
+            }
+        }
+        _ => editor.error(format!("E475: Invalid argument: {}", a.args.trim())),
+    }
+}
+
+/// `:syntax on|enable|off`: whether buffers are highlighted. `:syntax` alone answers like
+/// Neovim does for a buffer without Vim syntax items.
+fn syntax(editor: &mut Editor, a: &Args) {
+    match a.args.trim() {
+        "" => editor.info("No Syntax items defined for this buffer"),
+        "on" | "enable" => editor.syntax_on = true,
+        "off" => editor.syntax_on = false,
+        other => {
+            let sub = other.split_whitespace().next().unwrap_or(other);
+            editor.error(format!("E410: Invalid :syntax subcommand: {sub}"));
+        }
     }
 }
 
