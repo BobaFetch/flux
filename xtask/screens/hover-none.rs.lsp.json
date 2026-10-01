@@ -1,0 +1,1 @@
+{"capabilities": {"textDocumentSync": {"openClose": true, "change": 2}, "positionEncoding": "utf-8", "hoverProvider": true}, "on": {"textDocument/hover": {"result": null}}}

@@ -32,6 +32,11 @@ pub struct Span {
     pub end: usize,
     pub capture: &'static str,
     pub url: Option<std::sync::Arc<str>>,
+    /// Neovim's `conceal` metadata: with 'conceallevel', the text shows as this instead
+    /// (nothing when it's empty).
+    pub conceal: Option<std::sync::Arc<str>>,
+    /// Neovim's `conceal_lines`: the whole line is hidden.
+    pub conceal_lines: bool,
 }
 
 /// A capture in bytes, before sorting into paint order.
@@ -40,6 +45,8 @@ struct ByteSpan {
     capture: &'static str,
     priority: u32,
     url: Option<std::sync::Arc<str>>,
+    conceal: Option<std::sync::Arc<str>>,
+    conceal_lines: bool,
 }
 
 /// A parse tree for one buffer.
@@ -120,6 +127,11 @@ impl Syntax {
             resuming: false,
             injections: RefCell::default(),
         })
+    }
+
+    /// The tree is up to date with the text last given to [`Syntax::update`].
+    pub fn is_parsed(&self) -> bool {
+        !self.stale && self.tree.is_some()
     }
 
     /// The parser name.
@@ -249,20 +261,14 @@ impl Syntax {
             if from >= to {
                 continue;
             }
-            split_lines(text, from..to, s.capture, s.url, &mut out);
+            split_lines(text, from..to, &s, &mut out);
         }
         out
     }
 }
 
 /// Split a byte range into per-line char spans.
-fn split_lines(
-    text: &Text,
-    range: Range<usize>,
-    capture: &'static str,
-    url: Option<std::sync::Arc<str>>,
-    out: &mut Vec<Span>,
-) {
+fn split_lines(text: &Text, range: Range<usize>, s: &ByteSpan, out: &mut Vec<Span>) {
     let rope = text.rope();
     let first = rope.byte_to_line(range.start);
     let last = rope.byte_to_line(range.end);
@@ -282,13 +288,15 @@ fn split_lines(
             line_len
         };
         let to = to.min(line_len);
-        if from < to {
+        if from < to || s.conceal_lines {
             out.push(Span {
                 line,
                 start: from,
-                end: to,
-                capture,
-                url: url.clone(),
+                end: to.max(from),
+                capture: s.capture,
+                url: s.url.clone(),
+                conceal: s.conceal.clone(),
+                conceal_lines: s.conceal_lines,
             });
         }
     }
@@ -363,8 +371,12 @@ fn layer(
                 None => s.value.clone(),
             })
             .map(std::sync::Arc::from);
+        let conceal = pattern
+            .setting(Some(cap.index), "conceal")
+            .map(|s| std::sync::Arc::from(s.value.as_deref().unwrap_or("")));
+        let conceal_lines = pattern.setting(Some(cap.index), "conceal_lines").is_some();
         let hidden = name.starts_with('_') || matches!(name, "spell" | "nospell" | "conceal");
-        if hidden && url.is_none() {
+        if hidden && url.is_none() && conceal.is_none() && !conceal_lines {
             continue;
         }
         let priority = pattern
@@ -376,6 +388,8 @@ fn layer(
             capture: if hidden { "" } else { name },
             priority,
             url,
+            conceal,
+            conceal_lines,
         });
     }
     if depth >= MAX_INJECTION_DEPTH {

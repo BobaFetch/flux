@@ -30,6 +30,54 @@ pub struct Float {
     pub window: WindowId,
     pub source: BufferId,
     pub cursor: Cursor,
+    /// The height was fitted to the text as concealed (once its syntax is known).
+    pub fitted: bool,
+    /// It opened above the cursor: it's anchored at its bottom.
+    pub above: bool,
+    /// Text in the source window to highlight while the float is open (hover's range, in
+    /// LspReferenceTarget).
+    pub target: Option<(Cursor, Cursor)>,
+}
+
+/// A float line as shown, with 'conceallevel' 2: its text is laid out as it is, then
+/// concealed text is left out of the rows (so rows break where they would without conceal, as
+/// in Vim) or shown as its replacement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayLine {
+    /// The buffer line.
+    pub line: usize,
+    /// Concealed chars `[start, end)` and what shows instead.
+    pub conceals: Vec<(usize, usize, Option<char>)>,
+}
+
+impl DisplayLine {
+    /// Lay out the line in `width` columns ('linebreak'), with concealed glyphs taken out.
+    /// Concealed text with a replacement shows it once, in its first cell.
+    pub fn layout(&self, text: &str, tabstop: usize, width: usize) -> flux_core::LineLayout {
+        let mut layout = flux_core::layout_line_linebreak(text, tabstop, width);
+        let mut replaced = std::collections::HashSet::new();
+        for row in &mut layout.rows {
+            row.retain_mut(|g| {
+                let Some(&(start, _, with)) = self
+                    .conceals
+                    .iter()
+                    .find(|(s, e, _)| *s <= g.char_idx && g.char_idx < *e)
+                else {
+                    return true;
+                };
+                match with {
+                    Some(c) if replaced.insert(start) => {
+                        g.symbol = c.to_string();
+                        g.width = 1;
+                        g.kind = flux_core::GlyphKind::Text;
+                        true
+                    }
+                    _ => false,
+                }
+            });
+        }
+        layout
+    }
 }
 
 impl Editor {
@@ -77,7 +125,8 @@ impl Editor {
         let (cur_row, cur_col) = self.cursor_screen_position();
         let lines_above = cur_row.saturating_sub(rect.row);
         let lines_below = rect.height.saturating_sub(lines_above);
-        let row = if lines_below > lines_above {
+        let above = lines_below <= lines_above;
+        let row = if !above {
             height = height.min(lines_below.saturating_sub(1)).max(1);
             cur_row + 1
         } else {
@@ -111,7 +160,69 @@ impl Editor {
             window: self.window.id,
             source: self.window.buffer,
             cursor: self.window.cursor,
+            fitted: false,
+            above,
+            target: None,
         });
+    }
+
+    /// The lines of `float` as shown: with its syntax's conceal metadata, concealed text is
+    /// taken out (or shown as its replacement) and `conceal_lines` lines are left out, as with
+    /// 'conceallevel' 2 in a window that doesn't have the cursor.
+    pub fn float_lines(&self, float: &Float) -> Vec<DisplayLine> {
+        let Some(buffer) = self.buffer(float.buffer) else {
+            return Vec::new();
+        };
+        let text = &buffer.text;
+        let spans = match &buffer.syntax {
+            Some(s) if self.syntax_on => s.highlights(text, 0..text.line_count()),
+            _ => Vec::new(),
+        };
+        (0..text.line_count())
+            .filter(|&line| !spans.iter().any(|s| s.line == line && s.conceal_lines))
+            .map(|line| DisplayLine {
+                line,
+                conceals: spans
+                    .iter()
+                    .filter(|s| s.line == line)
+                    .filter_map(|s| Some((s.start, s.end, s.conceal.as_deref()?.chars().next())))
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Shrink floats to the text they show once concealed (Neovim's hover shrinks its window
+    /// when code block fences are hidden).
+    pub fn fit_floats(&mut self) {
+        for i in 0..self.floats.len() {
+            let f = &self.floats[i];
+            if f.fitted {
+                continue;
+            }
+            let parsed = self
+                .buffer(f.buffer)
+                .and_then(|b| b.syntax.as_ref())
+                .is_none_or(|s| s.is_parsed());
+            if !parsed {
+                continue;
+            }
+            let ts = self.buffer(f.buffer).map_or(8, |b| b.opts.tabstop);
+            let Some(text) = self.buffer(f.buffer).map(|b| &b.text) else {
+                continue;
+            };
+            let rows: usize = self
+                .float_lines(f)
+                .iter()
+                .map(|l| l.layout(&text.line_str(l.line), ts, f.width).row_count())
+                .sum();
+            let f = &mut self.floats[i];
+            let height = f.height.min(rows.max(1));
+            if f.above {
+                f.row += f.height - height;
+            }
+            f.height = height;
+            f.fitted = true;
+        }
     }
 
     /// Close every float, removing its scratch buffer.

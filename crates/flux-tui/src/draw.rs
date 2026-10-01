@@ -214,6 +214,29 @@ impl Pane<'_> {
                     at.link(grid, (span.start, span.end), &span.url);
                 }
             }
+            // A hover float's range (LspReferenceTarget).
+            for f in &self.editor.floats {
+                if f.window != win.id {
+                    continue;
+                }
+                if let Some((s, e)) = f.target
+                    && s.line <= line
+                    && line <= e.line
+                {
+                    let from = if s.line == line { s.col } else { 0 };
+                    let to = if e.line == line {
+                        e.col
+                    } else {
+                        text.line_len(line)
+                    };
+                    at.paint(
+                        grid,
+                        (from, to),
+                        self.theme.group("LspReferenceTarget"),
+                        false,
+                    );
+                }
+            }
             // Diagnostics are underlined, the most severe last.
             let mut on_line: Vec<_> = diagnostics
                 .iter()
@@ -587,31 +610,30 @@ impl Pane<'_> {
     }
 }
 
-/// A floating window: its lines in NormalFloat, wrapped at its width, with its buffer's syntax
-/// and its own highlights.
+/// A floating window: its lines in NormalFloat, concealed and wrapped (with 'linebreak') at
+/// its width, with its buffer's syntax and its own highlights.
 fn draw_float(editor: &Editor, theme: &Theme, float: &flux_view::float::Float, grid: &mut Grid) {
     let Some(buffer) = editor.buffer(float.buffer) else {
         return;
     };
-    let text = &buffer.text;
     let base = theme.normal_float;
     for r in 0..float.height {
         for x in 0..float.width {
             grid.set(float.col + x, float.row + r, " ", 1, base);
         }
     }
+    let text = &buffer.text;
     let spans = match &buffer.syntax {
         Some(s) if editor.syntax_on => s.highlights(text, 0..text.line_count()),
         _ => Vec::new(),
     };
     let mut row = 0;
-    for line in 0..text.line_count() {
+    for shown_line in editor.float_lines(float) {
         if row >= float.height {
             break;
         }
-        // Floats wrap with 'linebreak'.
-        let layout = flux_core::layout_line_linebreak(
-            &text.line_str(line),
+        let layout = shown_line.layout(
+            &text.line_str(shown_line.line),
             buffer.opts.tabstop,
             float.width,
         );
@@ -635,16 +657,19 @@ fn draw_float(editor: &Editor, theme: &Theme, float: &flux_view::float::Float, g
             row: float.row + row,
             rows: shown,
         };
-        for span in spans
-            .iter()
-            .filter(|s| s.line == line && !s.capture.is_empty())
-        {
-            at.paint(
-                grid,
-                (span.start, span.end),
-                theme.capture(span.capture),
-                false,
-            );
+        let line = shown_line.line;
+        for span in spans.iter().filter(|s| s.line == line) {
+            if !span.capture.is_empty() {
+                at.paint(
+                    grid,
+                    (span.start, span.end),
+                    theme.capture(span.capture),
+                    false,
+                );
+            }
+            if span.url.is_some() {
+                at.link(grid, (span.start, span.end), &span.url);
+            }
         }
         for h in float.highlights.iter().filter(|h| h.line == line) {
             at.paint(grid, (h.start, h.end), theme.group(&h.group), false);

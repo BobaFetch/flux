@@ -85,6 +85,7 @@ async fn run(mut editor: Editor) -> Result<()> {
     loop {
         // Parsing gets a slice of each frame; a long one goes on between keys.
         let parsing = editor.update_syntax_within(Some(PARSE_SLICE));
+        editor.fit_floats();
         editor.update_matchparen();
         let (width, height) = editor.screen_size();
         let same_size = |g: &Grid| g.width() == width && g.height() == height;

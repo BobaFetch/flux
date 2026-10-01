@@ -165,9 +165,27 @@ fn follow_edit(p: (usize, usize), e: &flux_core::ByteEdit, right_gravity: bool) 
     }
 }
 
+/// Requests sent to every server attached to a buffer, whose answers are used together
+/// (Neovim's `buf_request_all`).
+#[derive(Debug, Clone)]
+pub struct Group {
+    pub method: String,
+    pub buffer: BufferId,
+    /// The text and cursor when asked: an answer for another state is dropped.
+    pub revision: Revision,
+    pub cursor: Cursor,
+    pub window: crate::WindowId,
+    pub data: Value,
+    remaining: usize,
+    /// Each client's answer (`Err` with the error).
+    pub results: Vec<(ClientId, Result<Value, Value>)>,
+}
+
 /// Language servers and what they've told the editor.
 #[derive(Debug, Default)]
 pub struct LspState {
+    pub groups: HashMap<u64, Group>,
+    next_group: u64,
     /// The configs that start servers for matching buffers (`:lsp enable`).
     pub enabled: Vec<ServerConfig>,
     pub clients: Vec<Client>,
@@ -253,6 +271,16 @@ pub fn from_lsp(text: &Text, line: usize, character: usize, enc: Encoding) -> Cu
 pub fn to_lsp(text: &Text, at: Cursor, enc: Encoding) -> Value {
     let line = at.line.min(text.last_line());
     json!({ "line": line, "character": to_lsp_col(&text.line_str(line), at.col, enc) })
+}
+
+/// `textDocument` and `position` params for `cursor` in `buffer` (`text`), for `client`
+/// (Neovim's `make_position_params`).
+pub fn position_params(client: &Client, text: &Text, buffer: BufferId, cursor: Cursor) -> Value {
+    let uri = client.docs.get(&buffer).map(|d| d.uri.clone());
+    json!({
+        "textDocument": { "uri": uri },
+        "position": to_lsp(text, cursor, client.encoding),
+    })
 }
 
 /// What flux tells servers it can do (a subset of what Neovim sends, for the features flux has).
@@ -352,6 +380,23 @@ impl LspState {
         self.outbox.push(Outgoing::Send { client, message });
     }
 
+    /// An answer in group `id`; the group when it's complete.
+    pub fn group_answer(
+        &mut self,
+        id: u64,
+        client: ClientId,
+        answer: Result<Value, Value>,
+    ) -> Option<Group> {
+        let g = self.groups.get_mut(&id)?;
+        g.results.push((client, answer));
+        g.remaining = g.remaining.saturating_sub(1);
+        if g.remaining == 0 {
+            self.groups.remove(&id)
+        } else {
+            None
+        }
+    }
+
     /// The clients attached to `buffer`.
     pub fn clients_for(&self, buffer: BufferId) -> Vec<ClientId> {
         self.clients
@@ -378,6 +423,72 @@ impl LspState {
 }
 
 impl Editor {
+    /// Send `method` to every client attached to the current buffer that has `capability`,
+    /// with `params` made for each (they may count positions differently); the answers come
+    /// back together as a [`Group`] (see `flux_vim::lsp`). Returns how many were asked.
+    pub fn lsp_request_all(
+        &mut self,
+        method: &str,
+        capability: &str,
+        params: impl Fn(&Client, &Text, BufferId, Cursor) -> Value,
+        data: Value,
+    ) -> usize {
+        self.lsp_sync();
+        let buffer = self.window.buffer;
+        let Some(b) = self.buffers.iter().find(|b| b.id == buffer) else {
+            return 0;
+        };
+        let asked: Vec<(ClientId, Value)> = self
+            .lsp
+            .clients
+            .iter()
+            .filter(|c| c.state == ClientState::Running && c.docs.contains_key(&buffer))
+            .filter(|c| c.capability(&[capability]).is_some())
+            .map(|c| (c.id, params(c, &b.text, buffer, self.window.cursor)))
+            .collect();
+        if asked.is_empty() {
+            return 0;
+        }
+        let id = self.lsp.next_group;
+        self.lsp.next_group += 1;
+        self.lsp.groups.insert(
+            id,
+            Group {
+                method: method.to_string(),
+                buffer,
+                revision: b.text.revision(),
+                cursor: self.window.cursor,
+                window: self.window.id,
+                data,
+                remaining: asked.len(),
+                results: Vec::new(),
+            },
+        );
+        let n = asked.len();
+        for (client, params) in asked {
+            self.lsp.request(
+                client,
+                params,
+                Pending {
+                    method: method.to_string(),
+                    buffer: Some(buffer),
+                    data: json!({ "group": id }),
+                },
+            );
+        }
+        n
+    }
+
+    /// Whether the editor is still where `group` was asked from (Neovim's `ctx_is_valid`).
+    pub fn lsp_group_valid(&self, group: &Group) -> bool {
+        self.window.buffer == group.buffer
+            && self.window.id == group.window
+            && self.window.cursor == group.cursor
+            && self
+                .buffer(group.buffer)
+                .is_some_and(|b| b.text.revision() == group.revision)
+    }
+
     /// Start (or reuse) the servers for buffer `id` and open its document in them, as
     /// Neovim does on FileType for enabled configs (`vim.lsp.enable`).
     pub fn lsp_attach(&mut self, id: BufferId) {

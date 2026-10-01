@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::engine::Engine;
 
 mod commands;
+mod hover;
 
 /// Something a server sent.
 pub fn handle_message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Value) {
@@ -36,6 +37,17 @@ fn message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Valu
             else {
                 return;
             };
+            // An answer in a group waits for the others.
+            if let Some(group) = pending.data["group"].as_u64() {
+                let answer = match msg.get("error") {
+                    Some(e) => Err(e.clone()),
+                    None => Ok(msg["result"].clone()),
+                };
+                if let Some(done) = editor.lsp.group_answer(group, client, answer) {
+                    group_done(engine, editor, done);
+                }
+                return;
+            }
             match msg.get("error") {
                 Some(error) => response_error(editor, client, &pending, error),
                 None => response(engine, editor, client, pending, &msg["result"]),
@@ -162,6 +174,14 @@ fn response(
             editor.lsp.outbox.push(Outgoing::Kill { client });
         }
         _ => {}
+    }
+}
+
+/// All the servers asked have answered.
+fn group_done(engine: &mut Engine, editor: &mut Editor, group: flux_view::lsp::Group) {
+    let _ = engine;
+    if group.method.as_str() == "textDocument/hover" {
+        hover::show(editor, group);
     }
 }
 

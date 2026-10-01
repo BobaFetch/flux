@@ -1,0 +1,8 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8", "hoverProvider": true },
+  "on": {
+    "textDocument/hover": { "result": {
+      "contents": { "kind": "markdown", "value": "```rust\nfn compute(a: i32, b: i32) -> i32\n```\n\n---\n\nAdds *two* numbers with `+` and **returns** them. See [docs](https://example.com).\n" },
+      "range": { "start": { "line": 1, "character": 16 }, "end": { "line": 1, "character": 23 } } } }
+  }
+}
