@@ -185,7 +185,7 @@ Known gaps: tab pages, `:sb`/`:sball`, `:args`/`:next`/`:prev` (the argument lis
 affects `:q`), `'splitbelow'`/`'splitright'` and other options (`:set` is M4), `CTRL-W f`,
 `CTRL-W ]`, and the mouse.
 
-## M4: Search and Ex ✅ (awaiting manual check)
+## M4: Search and Ex ✅
 
 - Vim patterns, translated to the `regex` crate: all four magic levels (`\v \m \M \V`),
   `\c`/`\C`, 'ignorecase' and 'smartcase', `\< \>`, `\zs \ze`, `\{n,m}` and `\{-}`, groups
@@ -248,7 +248,7 @@ options not in the list above ('wrap', 'scrolloff', 'list', …). `:set` alone l
 options above, so it shows less than Neovim's. A long command line typed at a prompt over an
 earlier multi-line message scrolls a little differently from Neovim.
 
-## Directory browsing (between M4 and M5) ✅ (awaiting manual check)
+## Directory browsing (between M4 and M5) ✅
 
 A small netrw: `flux .`, `flux some/dir`, `:e dir`, `:sp dir` and `:vs dir` show a listing of
 the directory: `../`, then directories (marked `/`, in the Directory color), then files, each
@@ -273,7 +273,7 @@ no tree view. Fuzzy file finding is still M7.
 3. `:Vex`, then `o` on a file; `v` on another.
 4. `dd`, `x`, `i`, `p` in a listing give E21; `:w` gives E502.
 
-## M5: Syntax highlighting, indenting, filetypes ✅ (awaiting manual check)
+## M5: Syntax highlighting, indenting, filetypes ✅
 
 - Tree-sitter highlighting (new `flux-syntax` crate) for Rust, C, Lua, Python, JavaScript (with
   JSX), TypeScript, TSX, JSON, TOML, Bash and Markdown, with the queries Neovim uses (its own
