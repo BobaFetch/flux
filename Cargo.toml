@@ -38,3 +38,7 @@ print_stderr = "warn"
 
 [profile.release]
 debug = "line-tables-only"
+
+# The Neovim corpora replay tens of thousands of keys; unoptimized, that takes about a minute.
+[profile.test]
+opt-level = 1

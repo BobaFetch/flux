@@ -4,6 +4,7 @@ mod terminal;
 
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use crossterm::cursor::SetCursorStyle;
@@ -15,6 +16,8 @@ use flux_vim::{Engine, Key, KeyCode, Modifiers};
 use futures::StreamExt;
 
 const USAGE: &str = "usage: flux [file ...]";
+/// How long parsing may hold up a frame (see [`Editor::update_syntax_within`]).
+const PARSE_SLICE: Duration = Duration::from_millis(20);
 
 #[allow(clippy::print_stdout)]
 fn main() -> Result<()> {
@@ -62,7 +65,8 @@ async fn run(mut editor: Editor) -> Result<()> {
     let mut prompt_base: Option<Grid> = None;
 
     loop {
-        editor.update_syntax();
+        // Parsing gets a slice of each frame; a long one goes on between keys.
+        let parsing = editor.update_syntax_within(Some(PARSE_SLICE));
         editor.update_matchparen();
         let (width, height) = editor.screen_size();
         let same_size = |g: &Grid| g.width() == width && g.height() == height;
@@ -122,7 +126,16 @@ async fn run(mut editor: Editor) -> Result<()> {
         renderer.draw(&mut out, &grid, cursor)?;
         last_grid = Some(grid);
 
-        let Some(batch) = events.next().await else {
+        let batch = if parsing {
+            match tokio::time::timeout(Duration::ZERO, events.next()).await {
+                Ok(batch) => batch,
+                // No key yet: parse some more.
+                Err(_) => continue,
+            }
+        } else {
+            events.next().await
+        };
+        let Some(batch) = batch else {
             break;
         };
         for event in batch {

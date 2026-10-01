@@ -157,16 +157,25 @@ impl Editor {
 
     /// Bring the syntax trees of the buffers on screen up to date with their text.
     pub fn update_syntax(&mut self) {
+        self.update_syntax_within(Some(std::time::Duration::from_secs(10)));
+    }
+
+    /// Like [`Editor::update_syntax`], parsing each buffer for at most `budget` (`None`: only
+    /// move the trees along with the edits). Returns whether a parse is still unfinished, to
+    /// be continued by another call.
+    pub fn update_syntax_within(&mut self, budget: Option<std::time::Duration>) -> bool {
         if !self.syntax_on {
-            return;
+            return false;
         }
         let shown: Vec<BufferId> = std::iter::once(self.window.buffer)
             .chain(self.windows.iter().map(|w| w.buffer))
             .collect();
+        let mut pending = false;
         for buffer in self.buffers.iter_mut().filter(|b| shown.contains(&b.id)) {
             if let Some(syntax) = buffer.syntax.as_mut() {
-                syntax.update(&mut buffer.text);
+                pending |= !syntax.update(&mut buffer.text, budget);
             }
         }
+        pending
     }
 }

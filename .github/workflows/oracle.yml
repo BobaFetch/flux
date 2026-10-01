@@ -1,18 +1,23 @@
 name: Neovim oracle
 
-# Checks that the recorded expectations still match real Neovim. They can only drift when the
-# cases or the script that records them change, so this runs only then (or by hand).
+# Checks that the recorded expectations (oracle cases, the indent corpus, the default
+# colorscheme) still match real Neovim. They can only drift when their inputs or the scripts
+# that record them change, so this runs only then (or by hand).
 
 on:
   push:
     branches: [main]
     paths:
       - crates/flux-vim/tests/oracle/**
+      - crates/flux-vim/tests/indent/**
+      - crates/flux-view/src/colors.json
       - xtask/**
       - .github/workflows/oracle.yml
   pull_request:
     paths:
       - crates/flux-vim/tests/oracle/**
+      - crates/flux-vim/tests/indent/**
+      - crates/flux-view/src/colors.json
       - xtask/**
       - .github/workflows/oracle.yml
   workflow_dispatch:
@@ -34,3 +39,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask oracle check
+      - run: cargo xtask indent check
+      - run: cargo xtask colors check

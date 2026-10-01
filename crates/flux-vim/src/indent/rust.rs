@@ -151,9 +151,41 @@ fn is_match_arm(s: &str) -> bool {
 
 /// Whether line `line` starts inside a string literal that began on an earlier line (where
 /// Vim's syntax has `rustString` at the first column; a string that starts at the first column
-/// has `rustStringDelimiter` there). Found by lexing from the top of the buffer, as tree-sitter
-/// captures don't tell a string's delimiter from its contents.
+/// has `rustStringDelimiter` there). The syntax tree knows; without one, the buffer is lexed
+/// from the top.
 fn starts_in_string(ctx: &Ctx, line: usize) -> bool {
+    let Some(nodes) = ctx.nodes_at(line, 0) else {
+        return lex_starts_in_string(ctx, line.saturating_sub(SYNC_MAXLINES), line);
+    };
+    if nodes.iter().any(|&(kind, (row, _))| {
+        matches!(kind, "string_literal" | "raw_string_literal") && row < line
+    }) {
+        return true;
+    }
+    // Code tree-sitter couldn't parse (a string still being typed) here or at the end of the
+    // line before: lex it, from where the unparsed part starts.
+    let before = line
+        .checked_sub(1)
+        .and_then(|l| ctx.nodes_at(l, ctx.line(l).len().saturating_sub(1)))
+        .unwrap_or_default();
+    let error_start = nodes
+        .iter()
+        .chain(&before)
+        .filter(|(kind, _)| *kind == "ERROR")
+        .map(|&(_, (row, _))| row)
+        .min();
+    match error_start {
+        // Vim's Rust syntax looks back at most 500 lines (`syn sync maxlines=500`).
+        Some(row) => lex_starts_in_string(ctx, row.max(line.saturating_sub(SYNC_MAXLINES)), line),
+        None => false,
+    }
+}
+
+/// How far back Vim's Rust syntax looks to know what it's in.
+const SYNC_MAXLINES: usize = 500;
+
+/// Lex lines `from..line`, starting in code, to see if `line` starts inside a string.
+fn lex_starts_in_string(ctx: &Ctx, from: usize, line: usize) -> bool {
     #[derive(Clone, Copy, PartialEq)]
     enum State {
         Code,
@@ -162,7 +194,7 @@ fn starts_in_string(ctx: &Ctx, line: usize) -> bool {
         Block(usize),
     }
     let mut state = State::Code;
-    for l in 0..line {
+    for l in from..line {
         let s = ctx.line(l);
         let b = s.as_bytes();
         let at = |i: usize| b.get(i).copied().unwrap_or(0);

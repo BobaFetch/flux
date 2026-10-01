@@ -26,6 +26,9 @@ use flux_view::options::BufferOptions;
 use crate::engine::Engine;
 use crate::util::{self, pos};
 
+/// How long indenting waits for the syntax tree to catch up with the text.
+const SYNTAX_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// What the syntax says is at a position, as far as indent scripts care (they test Vim's
 /// syntax group names for "Comment", "String", …; flux asks the tree-sitter captures).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,13 +143,24 @@ impl<'a> Ctx<'a> {
         let spans = spans
             .entry(line)
             .or_insert_with(|| syntax.highlights(self.text, line..line + 1));
+        // A byte column inside a character means that character.
         let s = self.line(line);
-        let char_col = s[..col.min(s.len())].chars().count();
+        let char_col = s
+            .char_indices()
+            .take_while(|&(i, _)| i <= col)
+            .count()
+            .saturating_sub(1);
         spans
             .iter()
             .filter(|sp| sp.start <= char_col && char_col < sp.end && !sp.capture.is_empty())
             .map(|sp| sp.capture)
             .collect()
+    }
+
+    /// The syntax nodes containing byte `col` of line `line`, innermost first, with where they
+    /// start (line, byte column). `None` without a syntax tree.
+    pub fn nodes_at(&self, line: usize, col: usize) -> Option<Vec<(&'static str, (usize, usize))>> {
+        Some(self.syntax?.nodes_at(self.text, line, col))
     }
 
     /// What kind of syntax item byte `col` of line `line` is in.
@@ -343,9 +357,9 @@ pub(crate) fn in_cinkeys(editor: &Editor, typed: Typed, when: When, line_is_empt
                     let before = &line[..col];
                     let typed_word = before.get(col - n..).unwrap_or("");
                     let word_start = col == n
-                        || !before[..col - n]
-                            .chars()
-                            .last()
+                        || !before
+                            .get(..col - n)
+                            .and_then(|b| b.chars().last())
                             .is_some_and(flux_core::chars::is_keyword);
                     let mut matched = word_start
                         && if icase {
@@ -420,7 +434,9 @@ impl Engine {
     /// the line is left holding only its indent, which goes again if nothing is typed (Vim's
     /// `fixthisline` setting `did_ai`).
     pub(crate) fn fix_this_line(&mut self, editor: &mut Editor) -> bool {
-        editor.update_syntax();
+        // Indenters ask the syntax about strings and comments; a parse that takes long (an
+        // unclosed bracket in a big file) is cut short and the tree as it was is used.
+        editor.update_syntax_within(Some(SYNTAX_BUDGET));
         let lnum = editor.cursor().line;
         let Some(amount) = get_indent(editor, lnum) else {
             return false;
@@ -434,13 +450,15 @@ impl Engine {
     /// indent the indenter gives it, blank lines become empty.
     pub(crate) fn reindent(&mut self, editor: &mut Editor, first: usize, last: usize) {
         let want = editor.window.curswant;
+        // Reindenting only changes white space: the tree just follows the edits.
+        editor.update_syntax_within(Some(SYNTAX_BUDGET));
         for lnum in first..=last {
             editor.window.cursor = pos(lnum, 0);
             let s = util::line(editor, lnum);
             let amount = if s.chars().all(util::is_white) {
                 Some(0)
             } else {
-                editor.update_syntax();
+                editor.update_syntax_within(None);
                 get_indent(editor, lnum)
             };
             if let Some(amount) = amount {
