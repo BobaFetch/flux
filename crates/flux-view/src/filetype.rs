@@ -175,7 +175,7 @@ impl Editor {
         let mut pending = false;
         for buffer in self.buffers.iter_mut().filter(|b| shown.contains(&b.id)) {
             if let Some(syntax) = buffer.syntax.as_mut() {
-                pending |= !syntax.update(&mut buffer.text, budget);
+                pending |= !syntax.update(&buffer.text, budget);
             }
         }
         pending

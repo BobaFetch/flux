@@ -667,12 +667,12 @@ impl Editor {
             .collect();
         // Not shown while typing ('update_in_insert' is off): held until Insert mode ends.
         let target = if self.mode == crate::Mode::Insert {
-            let held = self
+            
+            self
                 .lsp
                 .held_diagnostics
                 .entry(uri.to_string())
-                .or_insert_with(|| self.lsp.diagnostics.get(uri).cloned().unwrap_or_default());
-            held
+                .or_insert_with(|| self.lsp.diagnostics.get(uri).cloned().unwrap_or_default())
         } else {
             self.lsp.diagnostics.entry(uri.to_string()).or_default()
         };
