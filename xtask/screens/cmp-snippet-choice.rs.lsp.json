@@ -1,0 +1,21 @@
+{
+ "capabilities": {
+  "textDocumentSync": {
+   "openClose": true,
+   "change": 2
+  },
+  "completionProvider": {}
+ },
+ "on": {
+  "textDocument/completion": {
+   "result": [
+    {
+     "label": "pick",
+     "kind": 15,
+     "insertTextFormat": 2,
+     "insertText": "pick(${1|one,two,three|}, $2)"
+    }
+   ]
+  }
+ }
+}

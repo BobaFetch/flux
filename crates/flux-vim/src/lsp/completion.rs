@@ -694,16 +694,17 @@ fn expand_snippet(engine: &mut Engine, editor: &mut Editor, src: &str) {
     };
     let at = editor.text().pos_to_char(cur.line, cur.col);
     engine.edit(editor, Edit::insert(at, expanded.text.clone()));
-    // The first tabstop: the lowest number from 1, or the end.
-    let dest = expanded
+    let end = at + expanded.text.chars().count();
+    let tabstops = expanded
         .tabstops
         .iter()
-        .filter(|t| t.0 > 0)
-        .min_by_key(|t| (t.0, t.1))
-        .or_else(|| expanded.tabstops.iter().find(|t| t.0 == 0))
-        .copied();
-    if let Some((_, start, _)) = dest {
-        let (line, col) = editor.text().char_to_pos(at + start);
-        editor.window.cursor = pos(line, col);
-    }
+        .map(|t| crate::snippet::NewTabstop {
+            index: t.index,
+            start: at + t.start,
+            end: at + t.end,
+            placement: t.placement,
+            choices: t.choices.clone(),
+        })
+        .collect();
+    engine.snippet_start(editor, at, end, tabstops);
 }

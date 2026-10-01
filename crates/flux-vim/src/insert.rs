@@ -349,6 +349,10 @@ impl Engine {
     /// Let completion handle `key` first. A key it uses up isn't recorded for `.`: what it
     /// changed is (see [`Engine::redo_retype`]).
     fn insert_completion_key(&mut self, editor: &mut Editor, key: Key) -> bool {
+        // `<Tab>` jumps in a snippet.
+        if self.snippet_key(editor, key) {
+            return true;
+        }
         let recorded = !self.state().repeating;
         let mut in_dot = false;
         if recorded {

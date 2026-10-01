@@ -17,6 +17,7 @@ mod open_line;
 pub mod parse;
 mod search;
 mod set;
+mod snippet;
 mod substitute;
 pub mod textobj;
 mod util;

@@ -84,6 +84,12 @@ pub struct CompletionView {
     /// An error from starting completion shows instead of the mode until the next key, with
     /// the cursor after it (as Neovim leaves it after an error in Insert mode).
     pub show_error: bool,
+    /// Select mode (`-- SELECT --`): Visual mode where typing replaces the selection, as a
+    /// snippet's placeholder is selected.
+    pub select: bool,
+    /// A snippet's tabstops: their ranges, and whether each is the current one
+    /// (SnippetTabstopActive) or not (SnippetTabstop).
+    pub snippet: Vec<(Cursor, Cursor, bool)>,
     /// What the statusline showed when last checked (Neovim's `w_stl_cursor` and friends).
     stl: Option<(Cursor, usize, usize, crate::Mode)>,
 }

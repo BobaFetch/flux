@@ -217,6 +217,25 @@ impl Pane<'_> {
                     at.link(grid, (span.start, span.end), &span.url);
                 }
             }
+            // A snippet's tabstops.
+            if win.id == self.editor.window.id {
+                for &(s, e, active) in &self.editor.completion.snippet {
+                    if s.line <= line && line <= e.line {
+                        let from = if s.line == line { s.col } else { 0 };
+                        let to = if e.line == line {
+                            e.col
+                        } else {
+                            text.line_len(line)
+                        };
+                        let group = if active {
+                            "SnippetTabstopActive"
+                        } else {
+                            "SnippetTabstop"
+                        };
+                        at.paint(grid, (from, to), self.theme.group(group), false);
+                    }
+                }
+            }
             // A hover float's range (LspReferenceTarget).
             for f in &self.editor.floats {
                 if f.window != win.id {
@@ -577,6 +596,11 @@ impl Pane<'_> {
             } else {
                 cursor.line + 1
             };
+            // In Insert mode an empty line's column is 1 (Neovim's `empty_line` is only for
+            // the other modes).
+            if self.is_current() && self.editor.mode == Mode::Insert {
+                return format!("{n},1");
+            }
             return format!("{n},0-1");
         }
         let byte_col = line
@@ -931,6 +955,8 @@ fn draw_cmdline(
         Mode::Insert | Mode::Visual => {
             let mode = match (editor.mode, editor.visual.kind) {
                 (Mode::Insert, _) => "-- INSERT --",
+                (_, VisualKind::Char) if editor.completion.select => "-- SELECT --",
+                (_, VisualKind::Line) if editor.completion.select => "-- SELECT LINE --",
                 (_, VisualKind::Char) => "-- VISUAL --",
                 (_, VisualKind::Line) => "-- VISUAL LINE --",
             };

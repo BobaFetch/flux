@@ -225,12 +225,23 @@ pub(crate) fn parse_text(input: &str) -> String {
     parse(input).map_or_else(|| input.to_string(), |n| n.text())
 }
 
-/// A snippet expanded for inserting: its text, and where its tabstops are in it (char
-/// offsets of their start and end), by tabstop number.
+/// A snippet expanded for inserting: its text, and its tabstops.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Expanded {
     pub text: String,
-    pub tabstops: Vec<(usize, usize, usize)>,
+    pub tabstops: Vec<Tabstop>,
+}
+
+/// A tabstop of an expanded snippet: its number, where it is in the text (char offsets),
+/// which part of the snippet it was (from 1), and a choice's values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Tabstop {
+    pub index: usize,
+    pub start: usize,
+    pub end: usize,
+    pub placement: usize,
+    /// A choice's values.
+    pub choices: Option<Vec<String>>,
 }
 
 /// Expand `input` as `vim.snippet.expand` does: placeholders' text, later lines indented as
@@ -275,23 +286,45 @@ pub(crate) fn expand(
         }
     };
     let len = |t: &String| t.chars().count();
-    for child in &children {
+    let add = |tabstops: &mut Vec<Tabstop>,
+               index,
+               start,
+               end,
+               placement,
+               choices: Option<Vec<String>>| {
+        tabstops.push(Tabstop {
+            index,
+            start,
+            end,
+            placement,
+            choices,
+        })
+    };
+    for (i, child) in children.iter().enumerate() {
+        let placement = i + 1;
         match child {
             Node::Tabstop(n) => {
                 let start = len(&text);
                 if let Some(p) = placeholder(*n) {
                     append(&mut text, &p);
                 }
-                tabstops.push((*n, start, len(&text)));
+                add(&mut tabstops, *n, start, len(&text), placement, None);
             }
             Node::Placeholder(n, _) => {
                 let start = len(&text);
                 append(&mut text, &placeholder(*n).unwrap_or_default());
-                tabstops.push((*n, start, len(&text)));
+                add(&mut tabstops, *n, start, len(&text), placement, None);
             }
-            Node::Choice(n, _) => {
+            Node::Choice(n, values) => {
                 let start = len(&text);
-                tabstops.push((*n, start, start));
+                add(
+                    &mut tabstops,
+                    *n,
+                    start,
+                    start,
+                    placement,
+                    Some(values.clone()),
+                );
             }
             Node::Variable(name, default) => {
                 let value = var(name).or_else(|| default.as_ref().map(|d| d.text()));
@@ -299,10 +332,10 @@ pub(crate) fn expand(
                     Some(v) => append(&mut text, &v),
                     None => {
                         // An unknown variable becomes a tabstop with its name.
-                        let n = tabstops.iter().map(|t| t.0).max().unwrap_or(0) + 1;
+                        let n = tabstops.iter().map(|t| t.index).max().unwrap_or(0) + 1;
                         let start = len(&text);
                         append(&mut text, name);
-                        tabstops.push((n, start, len(&text)));
+                        add(&mut tabstops, n, start, len(&text), placement, None);
                     }
                 }
             }
@@ -310,9 +343,9 @@ pub(crate) fn expand(
             Node::Snippet(_) => {}
         }
     }
-    if !tabstops.iter().any(|t| t.0 == 0) {
+    if !tabstops.iter().any(|t| t.index == 0) {
         let end = len(&text);
-        tabstops.push((0, end, end));
+        add(&mut tabstops, 0, end, end, children.len() + 1, None);
     }
     Some(Expanded { text, tabstops })
 }
@@ -335,7 +368,12 @@ mod tests {
     fn expanding() {
         let e = expand("foo(${1:x}, $2)$0", "", None, &|_| None).unwrap();
         assert_eq!(e.text, "foo(x, )");
-        assert_eq!(e.tabstops, vec![(1, 4, 5), (2, 7, 7), (0, 8, 8)]);
+        let ranges: Vec<_> = e
+            .tabstops
+            .iter()
+            .map(|t| (t.index, t.start, t.end))
+            .collect();
+        assert_eq!(ranges, vec![(1, 4, 5), (2, 7, 7), (0, 8, 8)]);
         let e = expand("if $1 {\n\t$0\n}", "    ", Some(4), &|_| None).unwrap();
         assert_eq!(e.text, "if  {\n        \n    }");
     }

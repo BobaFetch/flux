@@ -293,6 +293,7 @@ impl Engine {
         editor.refresh_window_widths();
         editor.with_window(|win, m| win.scroll_to_cursor(m));
         editor.pum_ruler_check();
+        self.snippet_check(editor);
     }
 
     fn normal_key(&mut self, editor: &mut Editor, key: Key) {
@@ -465,6 +466,7 @@ impl Engine {
         }
         let cursor = editor.cursor();
         let first = self.change.is_none();
+        self.snippet_edit(editor, &edit);
         let shift = LineShift::of(editor.text(), &edit);
         editor.current_buffer_mut().marks.adjust(&shift);
         // Lines `:g` has yet to visit move along (and are forgotten when deleted).

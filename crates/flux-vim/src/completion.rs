@@ -121,6 +121,8 @@ pub(crate) struct Completion {
     pub lsp_start: Option<flux_view::Cursor>,
     /// A `completionItem/resolve` for the info window is waiting for this match.
     pub resolving: Option<usize>,
+    /// A snippet being filled in (see [`crate::snippet`]).
+    pub snippet: Option<crate::snippet::Session>,
 }
 
 impl Completion {
@@ -551,7 +553,6 @@ impl Engine {
                     ..Match::new(self.compl.orig.clone())
                 };
                 self.compl.add(orig, false, true);
-                self.compl.started = true;
                 true
             }
             _ => false,
@@ -633,6 +634,8 @@ impl Engine {
         let Some(shown) = self.compl.shown else {
             return -1;
         };
+        let started = self.compl.started;
+        let no_insert = editor.completeopt("noinsert");
         if self.compl.leader.is_some() && !self.compl.matches[shown].original {
             self.compl_update_shown_match();
         }
@@ -648,12 +651,28 @@ impl Engine {
         if num == -2 {
             return -1;
         }
-        if insert_match {
+        if no_insert && !started {
+            // 'completeopt' `noinsert`: the typed text stays.
+            let len = self.compl_len(editor);
+            let rest: String = self.compl.orig.chars().skip(len).collect();
+            if !rest.is_empty() {
+                self.compl_insert_text(editor, &rest);
+            }
+            self.compl.used_match = false;
+        } else if insert_match {
             self.compl_insert(editor);
         } else {
             self.compl.used_match = false;
         }
-        self.compl.enter_selects = !insert_match && self.compl.array.is_some();
+        let shown_original = self
+            .compl
+            .shown
+            .is_some_and(|s| self.compl.matches[s].original);
+        self.compl.enter_selects = if no_insert && !started && !shown_original {
+            true
+        } else {
+            !insert_match && self.compl.array.is_some()
+        };
         num
     }
 
@@ -748,8 +767,9 @@ impl Engine {
                     return -2;
                 }
                 num = self.compl_get_exp(editor) as isize;
-                // Go to the first match found in the direction of completion.
-                if advance {
+                // Go to the first match found in the direction of completion, unless
+                // 'completeopt' has `noselect`.
+                if advance && !editor.completeopt("noselect") {
                     let s = self.compl.shown.expect("a shown match");
                     let next = if self.compl.shows_forward {
                         self.compl.next_of(s)
@@ -790,7 +810,7 @@ impl Engine {
         let mut words: Vec<(String, Option<String>)> = Vec::new();
         let current = editor.current_buffer().id;
         let text = editor.text();
-        for w in keyword_matches(text, &prefix, cur, start, forward, icase, true) {
+        for w in keyword_matches(text, &prefix, cur, Some(start), forward, icase, true) {
             words.push((w, None));
         }
         if !self.compl.local {
@@ -822,7 +842,7 @@ impl Engine {
                 } else {
                     pos(b.text.last_line(), b.text.line_len(b.text.last_line()))
                 };
-                for w in keyword_matches(&b.text, &prefix, begin, begin, forward, icase, false) {
+                for w in keyword_matches(&b.text, &prefix, begin, None, forward, icase, false) {
                     words.push((w, name.clone()));
                 }
             }
@@ -835,6 +855,7 @@ impl Engine {
             };
             self.compl.add(m, false, forward);
         }
+        self.compl.started = true;
         self.compl.make_cyclic()
     }
 
@@ -1014,7 +1035,7 @@ impl Engine {
         let mut cur = None;
         let changed = self.compl.array.is_none();
         if changed {
-            cur = self.build_pum();
+            cur = self.build_pum(editor.completeopt("noselect"));
         } else if let (Some(array), Some(s)) = (&self.compl.array, self.compl.shown) {
             cur = array.iter().position(|&i| i == s);
         }
@@ -1049,12 +1070,16 @@ impl Engine {
 
     /// The matches the typed text leaves, for the menu; returns the shown one's place (Vim's
     /// `ins_compl_build_pum`).
-    fn build_pum(&mut self) -> Option<usize> {
+    fn build_pum(&mut self, no_select: bool) -> Option<usize> {
         let c = &mut self.compl;
         if c.leader.as_deref() == Some(c.orig.as_str())
             && c.shown.is_some_and(|s| !c.matches[s].original)
         {
-            c.shown = c.first.and_then(|f| c.matches[f].next);
+            c.shown = if no_select {
+                c.first
+            } else {
+                c.first.and_then(|f| c.matches[f].next)
+            };
         }
         let mut shown_match_ok = c.shown.is_some_and(|s| c.matches[s].original);
         let mut did_find_shown = false;
@@ -1100,6 +1125,17 @@ impl Engine {
             cur = None;
         }
         cur
+    }
+
+    /// Drop the completion; a snippet session stays.
+    pub(crate) fn compl_reset(&mut self, editor: &mut Editor) {
+        editor.pum_undisplay();
+        editor.completion.submode = Default::default();
+        let snippet = self.compl.snippet.take();
+        self.compl = Completion {
+            snippet,
+            ..Completion::default()
+        };
     }
 
     /// Record for `.` what completing changed: back over the typed text that differs, then
@@ -1176,7 +1212,7 @@ fn keyword_matches(
     text: &flux_core::Text,
     prefix: &str,
     from: flux_view::Cursor,
-    skip: flux_view::Cursor,
+    skip: Option<flux_view::Cursor>,
     forward: bool,
     icase: bool,
     wrap: bool,
@@ -1208,7 +1244,7 @@ fn keyword_matches(
                 }
                 let word: String = chars[i..e].iter().collect();
                 let at = pos(l, i);
-                if e - i >= min && lower(&word).starts_with(&want) && at != skip {
+                if e - i >= min && lower(&word).starts_with(&want) && Some(at) != skip {
                     found.push((at, word));
                 }
                 i = e;
@@ -1217,6 +1253,13 @@ fn keyword_matches(
             }
         }
     }
+    if !wrap {
+        // Another buffer: all of it, from its start or its end.
+        if !forward {
+            found.reverse();
+        }
+        return found.into_iter().map(|(_, w)| w).collect();
+    }
     let key = |c: &flux_view::Cursor| (c.line, c.col);
     let (mut after, mut before): (Vec<_>, Vec<_>) = if forward {
         found.into_iter().partition(|(c, _)| key(c) > key(&from))
@@ -1224,8 +1267,6 @@ fn keyword_matches(
         let (a, b): (Vec<_>, Vec<_>) = found.into_iter().partition(|(c, _)| key(c) < key(&from));
         (a.into_iter().rev().collect(), b.into_iter().rev().collect())
     };
-    if wrap {
-        after.append(&mut before);
-    }
+    after.append(&mut before);
     after.into_iter().map(|(_, w)| w).collect()
 }

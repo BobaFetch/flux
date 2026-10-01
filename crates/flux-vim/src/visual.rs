@@ -22,6 +22,10 @@ impl Engine {
     }
 
     pub(crate) fn visual_key(&mut self, editor: &mut Editor, key: Key) {
+        // Select mode (a snippet's placeholder) and snippet jumps.
+        if self.select_key(editor, key) {
+            return;
+        }
         // A message shown over the mode (after a search) lasts until the next key.
         editor.message = None;
         self.visual_pending.push(key);
