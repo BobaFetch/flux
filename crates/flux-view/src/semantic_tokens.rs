@@ -744,7 +744,10 @@ mod tests {
         }
     }
 
-    fn spans(tokens: &[Token]) -> Vec<(usize, usize, usize, usize, &str, Vec<&str>)> {
+    /// A token as (start line, start col, end line, end col, type, modifiers).
+    type Flat<'a> = (usize, usize, usize, usize, &'a str, Vec<&'a str>);
+
+    fn spans(tokens: &[Token]) -> Vec<Flat<'_>> {
         tokens
             .iter()
             .map(|t| {
