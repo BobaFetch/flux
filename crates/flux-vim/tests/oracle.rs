@@ -8,7 +8,7 @@ use flux_view::Editor;
 use flux_vim::{Engine, parse_keys};
 use serde_json::Value;
 
-const MILESTONE: u64 = 3;
+const MILESTONE: u64 = 4;
 /// Neovim's headless screen; the text area is 80x22 once the statusline and command line are
 /// taken.
 const SCREEN: (usize, usize) = (80, 24);
@@ -60,11 +60,17 @@ fn layout_json(editor: &Editor) -> Value {
                     .unwrap_or_default();
                 let line = b.text.line_str(w.cursor.line.min(b.text.last_line()));
                 let byte_col: usize = line.chars().take(w.cursor.col).map(char::len_utf8).sum();
+                // Neovim's window width includes the number column.
+                let width = editor
+                    .window_rects()
+                    .into_iter()
+                    .find(|(wid, _)| wid == id)
+                    .map_or(w.width, |(_, r)| r.width);
                 serde_json::json!([
                     "leaf",
                     name,
                     w.height,
-                    w.width,
+                    width,
                     [w.cursor.line, byte_col],
                     w.top,
                     *id == editor.window.id,

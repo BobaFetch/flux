@@ -53,16 +53,59 @@ async fn run(mut editor: Editor) -> Result<()> {
     // before the next redraw.
     let mut events = EventStream::new().ready_chunks(256);
     let mut cursor_mode = None;
+    // The last frame drawn, and the hit-enter screen while it's up: like Vim, a message that
+    // needs a prompt is drawn over the screen as it was, without redrawing the text first.
+    let mut last_grid: Option<Grid> = None;
+    let mut prompt_base: Option<Grid> = None;
 
     loop {
         let (width, height) = editor.screen_size();
-        let mut grid = Grid::new(width, height);
-        let pending = match editor.mode {
-            Mode::Visual => engine.visual_pending_keys(),
-            _ => engine.pending_keys(),
+        let same_size = |g: &Grid| g.width() == width && g.height() == height;
+        let (grid, cursor) = if editor.hit_enter {
+            // The screen as it was when the prompt came up, with the prompt drawn over it.
+            let base = match prompt_base.take() {
+                Some(g) if same_size(&g) => g,
+                _ => match last_grid.take() {
+                    Some(g) if same_size(&g) && editor.fresh_message_base.is_none() => g,
+                    _ => {
+                        // Drawn with the view the message asks for, then the view is put back.
+                        let saved = (editor.window.top, editor.window.cursor);
+                        if let Some((top, cursor)) = editor.fresh_message_base {
+                            editor.window.top = top;
+                            editor.window.cursor = cursor;
+                        }
+                        let mut g = Grid::new(width, height);
+                        flux_tui::draw(&editor, "", &mut g);
+                        (editor.window.top, editor.window.cursor) = saved;
+                        g
+                    }
+                },
+            };
+            let mut grid = base.clone();
+            prompt_base = Some(base);
+            let cursor = flux_tui::draw::draw_hit_enter(&editor, &mut grid);
+            (grid, cursor)
+        } else if editor.stale_screen
+            && editor.mode == Mode::CmdLine
+            && last_grid.as_ref().is_some_and(same_size)
+        {
+            // A command line typed at a prompt: the message stays until the command runs.
+            prompt_base = None;
+            let mut grid = last_grid.take().expect("checked");
+            let cursor = flux_tui::draw::draw_cmdline_only(&editor, &mut grid);
+            (grid, cursor)
+        } else {
+            editor.stale_screen = false;
+            prompt_base = None;
+            let mut grid = Grid::new(width, height);
+            let pending = match editor.mode {
+                Mode::Visual => engine.visual_pending_keys(),
+                _ => engine.pending_keys(),
+            };
+            let showcmd: String = pending.iter().map(|k| k.showcmd()).collect();
+            let cursor = flux_tui::draw(&editor, &showcmd, &mut grid);
+            (grid, cursor)
         };
-        let showcmd: String = pending.iter().map(|k| k.showcmd()).collect();
-        let cursor = flux_tui::draw(&editor, &showcmd, &mut grid);
         if cursor_mode != Some(editor.mode) {
             cursor_mode = Some(editor.mode);
             let style = match editor.mode {
@@ -72,6 +115,7 @@ async fn run(mut editor: Editor) -> Result<()> {
             queue!(out, style)?;
         }
         renderer.draw(&mut out, &grid, cursor)?;
+        last_grid = Some(grid);
 
         let Some(batch) = events.next().await else {
             break;

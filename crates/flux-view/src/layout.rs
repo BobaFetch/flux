@@ -373,8 +373,8 @@ impl Layout {
         true
     }
 
-    /// Split `cur`, putting `new` above it (or to its left when `vertical`), as `:split` and
-    /// `:vsplit` do with 'nosplitbelow' and 'nosplitright'. `size` is a count given to the
+    /// Split `cur`, putting `new` above it (or to its left when `vertical`), or below (right
+    /// of) it with `after` ('splitbelow', 'splitright'). `size` is a count given to the
     /// command; without one the windows are made equal ('equalalways'). Returns false when
     /// there's no room.
     pub fn split(
@@ -383,6 +383,7 @@ impl Layout {
         new: WindowId,
         vertical: bool,
         size: Option<usize>,
+        after: bool,
     ) -> bool {
         let Some(path) = self.path(cur) else {
             return false;
@@ -433,11 +434,21 @@ impl Layout {
                 });
             }
             let new_size = new_size as usize;
-            // The new window, on the left, gets a separator.
-            let new_frame = Frame::leaf(new, new_size + 1, old.height);
-            let mut old_frame = old.clone();
-            old_frame.new_width(old.width.saturating_sub(new_size + 1), false, right);
-            (new_frame, old_frame)
+            if after {
+                // The new window, on the right, takes over the old one's separator (if any);
+                // the old one gets a separator.
+                let vsep = usize::from(!right);
+                let new_frame = Frame::leaf(new, new_size + vsep, old.height);
+                let mut old_frame = old.clone();
+                old_frame.new_width(old.width.saturating_sub(new_size + vsep), false, false);
+                (new_frame, old_frame)
+            } else {
+                // The new window, on the left, gets a separator.
+                let new_frame = Frame::leaf(new, new_size + 1, old.height);
+                let mut old_frame = old.clone();
+                old_frame.new_width(old.width.saturating_sub(new_size + 1), false, right);
+                (new_frame, old_frame)
+            }
         } else {
             let old_height = (old.height - STATUS) as isize;
             let mut min = old.min_height(None) as isize;
@@ -483,15 +494,22 @@ impl Layout {
             let idx = path[path.len() - 1];
             let parent = self.frame_at_mut(parent_path);
             parent.children_mut()[idx] = old_frame;
-            parent.children_mut().insert(idx, new_frame);
+            parent
+                .children_mut()
+                .insert(if after { idx + 1 } else { idx }, new_frame);
         } else {
             let slot = self.frame_at_mut(&path);
             let (width, height) = (old.width, old.height);
+            let children = if after {
+                vec![old_frame, new_frame]
+            } else {
+                vec![new_frame, old_frame]
+            };
             *slot = Frame {
                 kind: if vertical {
-                    Kind::Row(vec![new_frame, old_frame])
+                    Kind::Row(children)
                 } else {
-                    Kind::Col(vec![new_frame, old_frame])
+                    Kind::Col(children)
                 },
                 width,
                 height,
@@ -1080,17 +1098,17 @@ mod tests {
     #[test]
     fn splits_match_neovim() {
         let mut l = screen();
-        l.split(W(1), W(2), false, None);
+        l.split(W(1), W(2), false, None, false);
         assert_eq!(sizes(&l), [(11, 80), (10, 80)]);
-        l.split(W(2), W(3), false, None);
+        l.split(W(2), W(3), false, None, false);
         assert_eq!(sizes(&l), [(7, 80), (7, 80), (6, 80)]);
-        l.split(W(3), W(4), false, None);
+        l.split(W(3), W(4), false, None, false);
         assert_eq!(sizes(&l), [(5, 80), (5, 80), (5, 80), (4, 80)]);
 
         let mut l = screen();
-        l.split(W(1), W(2), true, None);
+        l.split(W(1), W(2), true, None, false);
         assert_eq!(sizes(&l), [(22, 40), (22, 39)]);
-        l.split(W(2), W(3), true, None);
+        l.split(W(2), W(3), true, None, false);
         assert_eq!(sizes(&l), [(22, 26), (22, 26), (22, 26)]);
     }
 
@@ -1099,7 +1117,7 @@ mod tests {
         let mut l = screen();
         let mut cur = W(1);
         for i in 2..=7 {
-            l.split(cur, W(i), false, None);
+            l.split(cur, W(i), false, None, false);
             cur = W(i);
         }
         assert_eq!(
@@ -1111,31 +1129,31 @@ mod tests {
     #[test]
     fn mixed_splits_and_counts() {
         let mut l = screen();
-        l.split(W(1), W(2), false, None);
-        l.split(W(2), W(3), true, None);
+        l.split(W(1), W(2), false, None, false);
+        l.split(W(2), W(3), true, None, false);
         assert_eq!(sizes(&l), [(11, 40), (11, 39), (10, 80)]);
 
         let mut l = screen();
-        l.split(W(1), W(2), false, Some(3));
+        l.split(W(1), W(2), false, Some(3), false);
         assert_eq!(sizes(&l), [(3, 80), (18, 80)]);
         let mut l = screen();
-        l.split(W(1), W(2), true, Some(20));
+        l.split(W(1), W(2), true, Some(20), false);
         assert_eq!(sizes(&l), [(22, 20), (22, 59)]);
     }
 
     #[test]
     fn close_gives_space_below_or_right() {
         let mut l = screen();
-        l.split(W(1), W(2), false, None);
-        l.split(W(2), W(3), false, None);
+        l.split(W(1), W(2), false, None, false);
+        l.split(W(2), W(3), false, None, false);
         // [3, 2, 1] top to bottom; close the middle one.
         assert_eq!(l.windows(), [W(3), W(2), W(1)]);
         assert_eq!(l.close(W(2)), Some(W(1)));
         assert_eq!(sizes(&l), [(10, 80), (11, 80)]);
 
         let mut l = screen();
-        l.split(W(1), W(2), true, None);
-        l.split(W(2), W(3), true, None);
+        l.split(W(1), W(2), true, None, false);
+        l.split(W(2), W(3), true, None, false);
         assert_eq!(l.close(W(2)), Some(W(1)));
         assert_eq!(sizes(&l), [(22, 39), (22, 40)]);
     }
@@ -1143,7 +1161,7 @@ mod tests {
     #[test]
     fn resizing() {
         let mut l = screen();
-        l.split(W(1), W(2), false, None);
+        l.split(W(1), W(2), false, None, false);
         l.set_height(W(2), 16);
         assert_eq!(sizes(&l), [(16, 80), (5, 80)]);
         l.set_height(W(2), 100);
@@ -1152,7 +1170,7 @@ mod tests {
         assert_eq!(sizes(&l), [(11, 80), (10, 80)]);
 
         let mut l = screen();
-        l.split(W(1), W(2), true, None);
+        l.split(W(1), W(2), true, None, false);
         l.set_width(W(2), 100);
         assert_eq!(sizes(&l), [(22, 78), (22, 1)]);
         l.set_width(W(2), 35);
@@ -1162,8 +1180,8 @@ mod tests {
     #[test]
     fn neighbors_follow_the_cursor() {
         let mut l = screen();
-        l.split(W(1), W(2), true, None); // 2 left, 1 right
-        l.split(W(2), W(3), false, None); // 3 top-left, 2 bottom-left
+        l.split(W(1), W(2), true, None, false); // 2 left, 1 right
+        l.split(W(2), W(3), false, None, false); // 3 top-left, 2 bottom-left
         assert_eq!(l.neighbor(W(3), 'l', 1, (0, 0)), Some(W(1)));
         assert_eq!(l.neighbor(W(1), 'h', 1, (0, 41)), Some(W(3)));
         assert_eq!(l.neighbor(W(1), 'h', 1, (15, 41)), Some(W(2)));
@@ -1174,7 +1192,7 @@ mod tests {
     #[test]
     fn move_to_edge() {
         let mut l = screen();
-        l.split(W(1), W(2), false, None);
+        l.split(W(1), W(2), false, None, false);
         l.move_to_edge(W(2), 'L');
         assert_eq!(l.windows(), [W(1), W(2)]);
         assert_eq!(sizes(&l), [(22, 39), (22, 40)]);
@@ -1183,7 +1201,7 @@ mod tests {
     #[test]
     fn screen_resize_takes_from_the_bottom() {
         let mut l = screen();
-        l.split(W(1), W(2), false, None);
+        l.split(W(1), W(2), false, None, false);
         // 13 rows: the bottom window keeps its minimum (1 text row and a statusline).
         l.resize(80, 13);
         assert_eq!(sizes(&l), [(10, 80), (1, 80)]);

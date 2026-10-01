@@ -55,6 +55,8 @@ pub struct Window {
     pub jumps: crate::JumpList,
     /// Where the last jump came from (the `''` mark).
     pub pcmark: Option<Cursor>,
+    /// Window-local options ('number', …).
+    pub opts: crate::options::WindowOptions,
 }
 
 /// Columns the `<<<` marker covers at the start of a partly shown top line (Neovim's
@@ -161,6 +163,7 @@ impl Window {
             fraction_row: None,
             jumps: Default::default(),
             pcmark: None,
+            opts: Default::default(),
         }
     }
 

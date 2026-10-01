@@ -5,204 +5,187 @@ use std::path::PathBuf;
 
 use flux_view::Editor;
 
-/// An Ex command name, and how short Vim lets you abbreviate it (`:w`, `:wq`, `:quita`).
+use crate::engine::Engine;
+use crate::ex_lines;
+use crate::global;
+use crate::set;
+use crate::substitute;
+
+/// How a command runs: with just the editor, or needing the engine (to edit text as one undo
+/// step, or to run keys).
+#[derive(Clone, Copy)]
+enum Run {
+    Editor(fn(&mut Editor, &Args)),
+    Engine(fn(&mut Engine, &mut Editor, &Args)),
+}
+
+/// What a range before a command means.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RangeKind {
+    /// No range allowed (E481).
+    None,
+    /// Buffer lines, checked against the buffer (E16).
+    Lines,
+    /// A number for the command (`:5split`, `:3bnext`): passed as `count`.
+    Other,
+}
+
+/// An Ex command name, how short Vim lets you abbreviate it (`:w`, `:wq`, `:quita`), and what
+/// it accepts.
+#[derive(Clone, Copy)]
 struct Command {
     name: &'static str,
     min_len: usize,
-    run: fn(&mut Editor, &Args),
+    run: Run,
+    range: RangeKind,
+    /// A count after the name (`:d 3`) that extends the range.
+    count: bool,
+    /// A register name after the name (`:d a`, `:pu x`).
+    register: bool,
+    /// Without a range, the whole buffer (`:w`, `:=`).
+    all_by_default: bool,
+    /// Line 0 is a valid address (`:0put`, `:m 0`).
+    zero: bool,
+    /// Keep trailing white space in the argument (`:normal`, `:s`).
+    raw: bool,
+}
+
+const fn cmd(name: &'static str, min_len: usize, run: fn(&mut Editor, &Args)) -> Command {
+    Command {
+        name,
+        min_len,
+        run: Run::Editor(run),
+        range: RangeKind::None,
+        count: false,
+        register: false,
+        all_by_default: false,
+        zero: false,
+        raw: false,
+    }
+}
+
+const fn ecmd(
+    name: &'static str,
+    min_len: usize,
+    run: fn(&mut Engine, &mut Editor, &Args),
+) -> Command {
+    Command {
+        name,
+        min_len,
+        run: Run::Engine(run),
+        range: RangeKind::None,
+        count: false,
+        register: false,
+        all_by_default: false,
+        zero: false,
+        raw: false,
+    }
+}
+
+impl Command {
+    const fn lines(mut self) -> Self {
+        self.range = RangeKind::Lines;
+        self
+    }
+    const fn other(mut self) -> Self {
+        self.range = RangeKind::Other;
+        self
+    }
+    const fn count(mut self) -> Self {
+        self.count = true;
+        self
+    }
+    const fn register(mut self) -> Self {
+        self.register = true;
+        self
+    }
+    const fn all(mut self) -> Self {
+        self.all_by_default = true;
+        self
+    }
+    const fn zero(mut self) -> Self {
+        self.zero = true;
+        self
+    }
+    const fn raw(mut self) -> Self {
+        self.raw = true;
+        self
+    }
 }
 
 const COMMANDS: &[Command] = &[
-    Command {
-        name: "write",
-        min_len: 1,
-        run: write,
-    },
-    Command {
-        name: "wq",
-        min_len: 2,
-        run: write_quit,
-    },
-    Command {
-        name: "wall",
-        min_len: 2,
-        run: write_all,
-    },
-    Command {
-        name: "wqall",
-        min_len: 3,
-        run: write_quit_all,
-    },
-    Command {
-        name: "xit",
-        min_len: 1,
-        run: exit,
-    },
-    Command {
-        name: "xall",
-        min_len: 2,
-        run: write_quit_all,
-    },
-    Command {
-        name: "exit",
-        min_len: 3,
-        run: exit,
-    },
-    Command {
-        name: "update",
-        min_len: 2,
-        run: update,
-    },
-    Command {
-        name: "edit",
-        min_len: 1,
-        run: edit,
-    },
-    Command {
-        name: "quit",
-        min_len: 1,
-        run: quit,
-    },
-    Command {
-        name: "qall",
-        min_len: 2,
-        run: quit_all,
-    },
-    Command {
-        name: "quitall",
-        min_len: 5,
-        run: quit_all,
-    },
-    Command {
-        name: "checktime",
-        min_len: 6,
-        run: checktime,
-    },
-    Command {
-        name: "registers",
-        min_len: 3,
-        run: registers,
-    },
-    Command {
-        name: "display",
-        min_len: 2,
-        run: registers,
-    },
-    Command {
-        name: "marks",
-        min_len: 5,
-        run: marks,
-    },
-    Command {
-        name: "delmarks",
-        min_len: 4,
-        run: delmarks,
-    },
-    Command {
-        name: "jumps",
-        min_len: 2,
-        run: jumps,
-    },
-    Command {
-        name: "split",
-        min_len: 2,
-        run: split,
-    },
-    Command {
-        name: "vsplit",
-        min_len: 2,
-        run: vsplit,
-    },
-    Command {
-        name: "new",
-        min_len: 3,
-        run: new_window,
-    },
-    Command {
-        name: "vnew",
-        min_len: 3,
-        run: vnew,
-    },
-    Command {
-        name: "close",
-        min_len: 3,
-        run: close,
-    },
-    Command {
-        name: "only",
-        min_len: 2,
-        run: only,
-    },
-    Command {
-        name: "resize",
-        min_len: 3,
-        run: resize,
-    },
-    Command {
-        name: "enew",
-        min_len: 3,
-        run: enew,
-    },
-    Command {
-        name: "buffer",
-        min_len: 1,
-        run: buffer,
-    },
-    Command {
-        name: "bnext",
-        min_len: 2,
-        run: bnext,
-    },
-    Command {
-        name: "bNext",
-        min_len: 2,
-        run: bprevious,
-    },
-    Command {
-        name: "bprevious",
-        min_len: 2,
-        run: bprevious,
-    },
-    Command {
-        name: "bfirst",
-        min_len: 2,
-        run: bfirst,
-    },
-    Command {
-        name: "brewind",
-        min_len: 2,
-        run: bfirst,
-    },
-    Command {
-        name: "blast",
-        min_len: 2,
-        run: blast,
-    },
-    Command {
-        name: "bdelete",
-        min_len: 2,
-        run: bdelete,
-    },
-    Command {
-        name: "bwipeout",
-        min_len: 2,
-        run: bwipeout,
-    },
-    Command {
-        name: "ls",
-        min_len: 2,
-        run: list_buffers,
-    },
-    Command {
-        name: "buffers",
-        min_len: 7,
-        run: list_buffers,
-    },
-    Command {
-        name: "files",
-        min_len: 5,
-        run: list_buffers,
-    },
+    cmd("write", 1, write).lines().all(),
+    cmd("wq", 2, write_quit).lines().all(),
+    cmd("wall", 2, write_all),
+    cmd("wqall", 3, write_quit_all),
+    cmd("xit", 1, exit).lines().all(),
+    cmd("xall", 2, write_quit_all),
+    cmd("exit", 3, exit).lines().all(),
+    cmd("update", 2, update).lines().all(),
+    cmd("edit", 1, edit),
+    cmd("quit", 1, quit),
+    cmd("qall", 2, quit_all),
+    cmd("quitall", 5, quit_all),
+    cmd("checktime", 6, checktime),
+    cmd("registers", 3, registers),
+    cmd("display", 2, registers),
+    cmd("marks", 5, marks),
+    cmd("delmarks", 4, delmarks),
+    cmd("jumps", 2, jumps),
+    cmd("split", 2, split).other(),
+    cmd("vsplit", 2, vsplit).other(),
+    cmd("new", 3, new_window).other(),
+    cmd("vnew", 3, vnew).other(),
+    cmd("close", 3, close),
+    cmd("only", 2, only),
+    cmd("resize", 3, resize).other(),
+    cmd("enew", 3, enew),
+    cmd("buffer", 1, buffer).other(),
+    cmd("bnext", 2, bnext).other(),
+    cmd("bNext", 2, bprevious).other(),
+    cmd("bprevious", 2, bprevious).other(),
+    cmd("bfirst", 2, bfirst),
+    cmd("brewind", 2, bfirst),
+    cmd("blast", 2, blast),
+    cmd("bdelete", 2, bdelete).other(),
+    cmd("bwipeout", 2, bwipeout).other(),
+    cmd("ls", 2, list_buffers),
+    cmd("buffers", 7, list_buffers),
+    cmd("files", 5, list_buffers),
+    ecmd("delete", 1, ex_lines::delete)
+        .lines()
+        .count()
+        .register(),
+    ecmd("yank", 1, ex_lines::yank_lines)
+        .lines()
+        .count()
+        .register(),
+    ecmd(">", 1, ex_lines::shift).lines().count(),
+    ecmd("<", 1, ex_lines::shift).lines().count(),
+    ecmd("move", 1, ex_lines::move_lines).lines(),
+    ecmd("copy", 2, ex_lines::copy_lines).lines(),
+    ecmd("t", 1, ex_lines::copy_lines).lines(),
+    ecmd("join", 1, ex_lines::join).lines().count(),
+    ecmd("put", 2, ex_lines::put).lines().register().zero(),
+    cmd("print", 1, ex_lines::print).lines().count(),
+    cmd("number", 2, ex_lines::number).lines().count(),
+    cmd("#", 1, ex_lines::number).lines().count(),
+    cmd("=", 1, ex_lines::equal).lines().all(),
+    cmd("k", 1, ex_lines::mark).lines(),
+    cmd("mark", 2, ex_lines::mark).lines(),
+    ecmd("normal", 4, ex_lines::normal).lines().raw(),
+    ecmd("undo", 1, ex_lines::undo),
+    ecmd("redo", 3, ex_lines::redo),
+    cmd("nohlsearch", 3, ex_lines::nohlsearch),
+    ecmd("substitute", 1, substitute::substitute).lines().raw(),
+    ecmd("&&", 2, substitute::substitute).lines().raw(),
+    ecmd("&", 1, substitute::substitute).lines().raw(),
+    ecmd("~", 1, substitute::substitute).lines().raw(),
+    ecmd("global", 1, global::global).lines().all().raw(),
+    ecmd("vglobal", 1, global::global).lines().all().raw(),
+    cmd("set", 2, set::set),
+    cmd("setlocal", 4, set::setlocal),
+    cmd("setglobal", 4, set::setglobal),
 ];
 
 /// What a command was given besides its name.
@@ -213,12 +196,30 @@ pub(crate) struct Args<'a> {
     pub count: Option<usize>,
     /// The `:vertical` modifier.
     pub vertical: bool,
+    /// The range, 1-based (line 0 only for commands that allow it), and how many addresses were
+    /// given (0 when the command got its default range).
+    pub line1: usize,
+    pub line2: usize,
+    pub addr_count: usize,
+    /// `:d a`, `:pu x`.
+    pub register: Option<char>,
+    /// The command name as typed, for commands that look at it (`:>>`).
+    pub name: &'a str,
 }
 
+/// Run an Ex command line outside of an engine (tests, and commands that don't edit text).
 pub fn execute(editor: &mut Editor, line: &str) {
+    let mut engine = Engine::new();
+    run(&mut engine, editor, line);
+    engine.commit(editor);
+}
+
+/// Run an Ex command line.
+pub fn run(engine: &mut Engine, editor: &mut Editor, line: &str) {
     editor.quitmore = editor.quitmore.saturating_sub(1);
-    let mut line = line.trim_start_matches([' ', ':']).trim_end();
-    if line.is_empty() {
+    let full = line;
+    let mut line = line.trim_start_matches([' ', '\t', ':']);
+    if line.trim().is_empty() {
         return;
     }
     let mut vertical = false;
@@ -226,92 +227,347 @@ pub fn execute(editor: &mut Editor, line: &str) {
         vertical = true;
         line = rest;
     }
-    let (count, rest) = parse_range(editor, line);
-    let rest = rest.trim_start();
+    let range = match parse_range(editor, line) {
+        Ok(r) => r,
+        Err(e) => {
+            if !e.is_empty() {
+                editor.error(e);
+            }
+            return;
+        }
+    };
+    let rest = range.rest.trim_start_matches([' ', '\t', ':']);
     if rest.is_empty() {
-        if let Some(n) = count {
-            let target = n.saturating_sub(1);
+        // `:N`: go to line N (the last line if past the end).
+        if range.addr_count > 0 {
+            if range.line2 < 0 {
+                editor.error("E16: Invalid range");
+                return;
+            }
+            let count = editor.text().line_count() as isize;
+            let target = range.line2.clamp(1, count) as usize - 1;
             editor.with_window(|win, m| win.set_cursor_line(target, m));
         }
         return;
     }
 
-    let name_len = rest
-        .find(|c: char| !c.is_ascii_alphabetic())
-        .unwrap_or(rest.len());
-    let (name, rest) = rest.split_at(name_len);
-    let (bang, args) = match rest.strip_prefix('!') {
-        Some(args) => (true, args.trim()),
-        None => (false, rest.trim()),
+    let (name, after) = split_command_name(rest);
+    let (bang, args) = match after.strip_prefix('!') {
+        Some(args) if !name.starts_with(['<', '>', '&', '~', '=']) => (true, args),
+        _ => (false, after),
     };
-    let command = COMMANDS
-        .iter()
-        .find(|c| name.len() >= c.min_len && c.name.starts_with(name));
-    match command {
-        Some(command) => (command.run)(
-            editor,
-            &Args {
-                bang,
-                args,
-                count,
-                vertical,
-            },
-        ),
-        None => editor.error(format!("E492: Not an editor command: {line}")),
-    }
-}
-
-/// A leading range (`.`, `$`, `%`, numbers, `+N`/`-N` offsets, two addresses separated by
-/// `,`), returning its last line (1-based) and the rest of the command. The full range syntax
-/// arrives with M4.
-fn parse_range<'a>(editor: &Editor, line: &'a str) -> (Option<usize>, &'a str) {
-    if let Some(rest) = line.strip_prefix('%') {
-        return (Some(editor.text().line_count()), rest);
-    }
-    let mut rest = line;
-    let mut last = None;
-    loop {
-        let (addr, after) = parse_address(editor, rest);
-        if addr.is_some() {
-            last = addr;
-        }
-        rest = after;
-        match rest.strip_prefix([',', ';']) {
-            Some(after) => rest = after,
-            None => break,
-        }
-    }
-    (last, rest)
-}
-
-/// One address: a line (`.`, `$`, a number, a mark) and any `+N`/`-N` offsets.
-fn parse_address<'a>(editor: &Editor, s: &'a str) -> (Option<usize>, &'a str) {
-    let current = editor.cursor().line as isize + 1;
-    let digits = |s: &str| s.chars().take_while(char::is_ascii_digit).count();
-    let (mut line, mut rest) = if let Some(rest) = s.strip_prefix('.') {
-        (Some(current), rest)
-    } else if let Some(rest) = s.strip_prefix('$') {
-        (Some(editor.text().line_count() as isize), rest)
-    } else if let Some(name) = s.strip_prefix('\'').and_then(|r| r.chars().next()) {
-        let line = crate::motion::mark_position(editor, name).map(|p| p.line as isize + 1);
-        (line, &s[1 + name.len_utf8()..])
+    let Some(command) = find_command(name) else {
+        editor.error(format!("E492: Not an editor command: {}", full.trim()));
+        return;
+    };
+    let args = if command.raw {
+        args.trim_start_matches([' ', '\t'])
     } else {
-        let n = digits(s);
-        (s[..n].parse::<isize>().ok(), &s[n..])
+        args.trim()
     };
-    while let Some(sign) = rest.chars().next().filter(|c| matches!(c, '+' | '-')) {
-        let after = &rest[1..];
-        let n = digits(after);
-        let offset = after[..n].parse::<isize>().unwrap_or(1);
-        let base = line.unwrap_or(current);
-        line = Some(if sign == '+' {
-            base + offset
+
+    let last = editor.text().line_count() as isize;
+    let current = editor.cursor().line as isize + 1;
+    let (mut line1, mut line2) = if range.addr_count == 0 {
+        if command.all_by_default {
+            (1, last)
         } else {
-            base - offset
-        });
-        rest = &after[n..];
+            (current, current)
+        }
+    } else {
+        (range.line1, range.line2)
+    };
+    let mut addr_count = range.addr_count;
+    let mut args = args;
+    let mut count = None;
+    let mut register = None;
+    match command.range {
+        RangeKind::None if addr_count > 0 => {
+            editor.error("E481: No range allowed");
+            return;
+        }
+        RangeKind::None => {}
+        RangeKind::Other => {
+            if addr_count > 0 {
+                count = Some(line2.max(0) as usize);
+            }
+        }
+        RangeKind::Lines => {
+            if line1 > line2 {
+                if !engine.swap_range {
+                    // Vim asks first; the answer runs the command again.
+                    engine.confirm_swap = Some(full.to_string());
+                    editor.message = Some(flux_view::Message {
+                        text: "Backwards range given, OK to swap (y/n)?".into(),
+                        kind: flux_view::MessageKind::Question,
+                    });
+                    return;
+                }
+                std::mem::swap(&mut line1, &mut line2);
+            }
+            if line1 < 0 || line2 > last {
+                editor.error("E16: Invalid range");
+                return;
+            }
+            if !command.zero {
+                line1 = line1.max(1);
+                line2 = line2.max(1);
+            }
+            if command.register
+                && let Some(c) = args.chars().next()
+                && !c.is_ascii_digit()
+                && flux_view::registers::is_valid_name(c)
+            {
+                register = Some(c);
+                args = args[c.len_utf8()..].trim_start();
+            }
+            if command.count && args.starts_with(|c: char| c.is_ascii_digit()) {
+                let digits: String = args.chars().take_while(char::is_ascii_digit).collect();
+                args = args[digits.len()..].trim_start();
+                let n: isize = digits.parse().unwrap_or(0);
+                if n <= 0 {
+                    editor.error("E939: Positive count required");
+                    return;
+                }
+                line1 = line2;
+                line2 = (line2 + n - 1).min(last);
+                addr_count += 1;
+            }
+        }
     }
-    (line.map(|l| l.max(0) as usize), rest)
+    let a = Args {
+        bang,
+        args,
+        count,
+        vertical,
+        line1: line1.max(0) as usize,
+        line2: line2.max(0) as usize,
+        addr_count,
+        register,
+        name,
+    };
+    // `:e! file`, `:b! 3`, …: may leave a buffer with unsaved changes without 'hidden'.
+    editor.force_abandon = bang;
+    match command.run {
+        Run::Editor(f) => f(editor, &a),
+        Run::Engine(f) => f(engine, editor, &a),
+    }
+    editor.force_abandon = false;
+}
+
+/// Split the command name off: letters (`s`, `delete`, `k` alone before a mark name), or one of
+/// the symbol commands (`&`, `&&`, `~`, `<<<`, `>`, `=`).
+fn split_command_name(s: &str) -> (&str, &str) {
+    let first = s.chars().next().unwrap_or(' ');
+    let len = match first {
+        '<' | '>' => s.chars().take_while(|&c| c == first).count(),
+        '&' => {
+            if s[1..].starts_with('&') {
+                2
+            } else {
+                1
+            }
+        }
+        '~' | '=' | '#' => 1,
+        // `:ka` is `:k a`, `:s#a#b#` is `:s` with `#` as the delimiter.
+        'k' if s[1..].starts_with(|c: char| c.is_ascii_alphabetic()) && !s.starts_with("keep") => 1,
+        _ => s
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(s.len()),
+    };
+    let len = if len == 0 { 1.min(s.len()) } else { len };
+    s.split_at(len)
+}
+
+fn find_command(name: &str) -> Option<Command> {
+    if name.is_empty() {
+        return None;
+    }
+    let key = match name.chars().next() {
+        Some('<') => "<",
+        Some('>') => ">",
+        _ => name,
+    };
+    COMMANDS
+        .iter()
+        .find(|c| key.len() >= c.min_len && c.name.starts_with(key))
+        .copied()
+}
+
+/// A parsed range: its two lines (1-based; may be out of range, checked by the caller), how
+/// many addresses were given, and the rest of the command line.
+struct ParsedRange<'a> {
+    line1: isize,
+    line2: isize,
+    addr_count: usize,
+    rest: &'a str,
+}
+
+/// Vim's `parse_cmd_address`: addresses separated by `,` or `;` (which moves the cursor), `%`
+/// and `*`.
+fn parse_range<'a>(editor: &mut Editor, s: &'a str) -> Result<ParsedRange<'a>, String> {
+    let mut line1;
+    let mut line2 = editor.cursor().line as isize + 1;
+    let mut addr_count = 0;
+    let mut rest = s;
+    let mut last_none;
+    loop {
+        line1 = line2;
+        line2 = editor.cursor().line as isize + 1;
+        rest = rest.trim_start_matches([' ', '\t']);
+        let (lnum, after) = get_address(editor, rest, addr_count == 0)?;
+        rest = after;
+        last_none = lnum.is_none();
+        match lnum {
+            None => {
+                if let Some(after) = rest.strip_prefix('%') {
+                    rest = after;
+                    line1 = 1;
+                    line2 = editor.text().line_count() as isize;
+                    addr_count += 1;
+                } else if let Some(after) = rest.strip_prefix('*') {
+                    rest = after;
+                    let start = crate::motion::mark_position(editor, '<');
+                    let end = crate::motion::mark_position(editor, '>');
+                    match (start, end) {
+                        (Some(a), Some(b)) => {
+                            line1 = a.line as isize + 1;
+                            line2 = b.line as isize + 1;
+                            addr_count += 1;
+                        }
+                        _ => return Err("E20: Mark not set".into()),
+                    }
+                }
+            }
+            Some(l) => line2 = l,
+        }
+        addr_count += 1;
+        if let Some(after) = rest.strip_prefix(';') {
+            let last = editor.text().last_line();
+            editor.window.cursor.line = (line2.max(1) as usize - 1).min(last);
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix(',') {
+            rest = after;
+        } else {
+            break;
+        }
+    }
+    if addr_count == 1 {
+        line1 = line2;
+        if last_none {
+            addr_count = 0;
+        }
+    }
+    Ok(ParsedRange {
+        line1,
+        line2,
+        addr_count,
+        rest,
+    })
+}
+
+/// Vim's `get_address`: one address with its `+N`/`-N` offsets, or `None` if there is none.
+/// Errors are messages to show (empty when already shown).
+fn get_address<'a>(
+    editor: &mut Editor,
+    s: &'a str,
+    _first: bool,
+) -> Result<(Option<isize>, &'a str), String> {
+    let digits = |s: &str| s.chars().take_while(char::is_ascii_digit).count();
+    let mut rest = s.trim_start_matches([' ', '\t']);
+    let mut lnum: Option<isize> = None;
+    loop {
+        let c = rest.chars().next();
+        match c {
+            Some('.') => {
+                lnum = Some(editor.cursor().line as isize + 1);
+                rest = &rest[1..];
+            }
+            Some('$') => {
+                lnum = Some(editor.text().line_count() as isize);
+                rest = &rest[1..];
+            }
+            Some('\'') => {
+                let Some(name) = rest[1..].chars().next() else {
+                    return Err(String::new());
+                };
+                rest = &rest[1 + name.len_utf8()..];
+                match crate::motion::mark_position(editor, name) {
+                    Some(p) => lnum = Some(p.line as isize + 1),
+                    None => return Err("E20: Mark not set".into()),
+                }
+            }
+            Some(d @ ('/' | '?')) => {
+                let from = lnum.unwrap_or(editor.cursor().line as isize + 1);
+                let (line, used) = flux_view::search::address_search(editor, d, &rest[1..], from)
+                    .map_err(|()| String::new())?;
+                lnum = Some(line as isize + 1);
+                rest = &rest[1 + used..];
+            }
+            Some('\\') => {
+                let kind = rest[1..].chars().next();
+                let from = lnum.unwrap_or(editor.cursor().line as isize + 1);
+                let line = match kind {
+                    Some(k @ ('/' | '?' | '&')) => {
+                        flux_view::search::repeat_address_search(editor, k, from)
+                            .map_err(|()| String::new())?
+                    }
+                    _ => return Err("E10: \\ should be followed by /, ? or &".into()),
+                };
+                lnum = Some(line as isize + 1);
+                rest = &rest[2..];
+            }
+            Some(d) if d.is_ascii_digit() => {
+                let n = digits(rest);
+                lnum = rest[..n].parse().ok();
+                rest = &rest[n..];
+            }
+            _ => {}
+        }
+        // Offsets: `+N`, `-N`, `+`, `-`, and a bare number meaning `+N`.
+        loop {
+            rest = rest.trim_start_matches([' ', '\t']);
+            let Some(c) = rest.chars().next() else {
+                break;
+            };
+            if !matches!(c, '+' | '-') && !c.is_ascii_digit() {
+                break;
+            }
+            let base = lnum.unwrap_or(editor.cursor().line as isize + 1);
+            let sign = if c.is_ascii_digit() {
+                '+'
+            } else {
+                rest = &rest[1..];
+                c
+            };
+            let n = digits(rest);
+            let amount: isize = if n == 0 {
+                1
+            } else {
+                rest[..n].parse().unwrap_or(0)
+            };
+            rest = &rest[n..];
+            lnum = Some(if sign == '+' {
+                base + amount
+            } else {
+                base - amount
+            });
+        }
+        // Another search can follow: `/foo//bar/`.
+        if !rest.starts_with(['/', '?']) {
+            break;
+        }
+    }
+    Ok((lnum, rest))
+}
+
+/// One address making up the whole of `s` (the destination of `:m` and `:t`).
+pub(crate) fn parse_single_address(editor: &mut Editor, s: &str) -> Result<Option<isize>, String> {
+    let (lnum, rest) = get_address(editor, s.trim(), true)?;
+    if !rest.trim().is_empty() {
+        return Err(format!("E488: Trailing characters: {}", rest.trim()));
+    }
+    Ok(lnum)
 }
 
 /// `line` without a leading command modifier like `vert[ical]`.
@@ -324,7 +580,7 @@ fn strip_modifier<'a>(line: &'a str, name: &str, min_len: usize) -> Option<&'a s
         .then(|| line[word_len..].trim_start())
 }
 
-fn no_args(editor: &mut Editor, args: &str) -> bool {
+pub(crate) fn no_args(editor: &mut Editor, args: &str) -> bool {
     if args.is_empty() {
         return true;
     }
@@ -349,9 +605,34 @@ fn do_write(editor: &mut Editor, bang: bool, args: &str) -> bool {
 }
 
 fn write(editor: &mut Editor, a: &Args) {
-    let bang = a.bang;
-    let args = a.args;
-    do_write(editor, bang, args);
+    let whole = a.line1 <= 1 && a.line2 >= editor.text().line_count();
+    if a.addr_count > 0 && !whole {
+        write_part(editor, a);
+        return;
+    }
+    do_write(editor, a.bang, a.args);
+}
+
+/// `:[range]w[!] [file]` for part of the buffer.
+fn write_part(editor: &mut Editor, a: &Args) {
+    let cwd = editor.cwd.clone();
+    let target = if a.args.is_empty() {
+        match editor.current_buffer().path.clone() {
+            Some(p) => cwd.join(p),
+            None => {
+                editor.error("E32: No file name");
+                return;
+            }
+        }
+    } else {
+        cwd.join(a.args)
+    };
+    let buffer = editor.current_buffer();
+    let own = buffer.path.as_ref().map(|p| cwd.join(p)).as_deref() == Some(target.as_path());
+    match buffer.write_lines(&target, a.line1 - 1, a.line2 - 1, a.bang, own) {
+        Ok(msg) => editor.file_message(msg.replace(&format!("{}/", cwd.display()), "")),
+        Err(e) => editor.error(e),
+    }
 }
 
 fn write_all(editor: &mut Editor, a: &Args) {
@@ -840,6 +1121,22 @@ fn printable(s: &str) -> String {
     out
 }
 
+/// `s` made printable (`^J`, `^I`, …) and cut to `width` cells without splitting a `^X`.
+fn fit_printable(s: &str, width: usize) -> String {
+    let mut used = 0;
+    let mut out = String::new();
+    for c in s.chars() {
+        let shown = printable(&c.to_string());
+        let w = unicode_width::UnicodeWidthStr::width(shown.as_str()).max(1);
+        if used + w > width {
+            break;
+        }
+        used += w;
+        out.push_str(&shown);
+    }
+    out
+}
+
 /// Cut `s` to `width` cells.
 fn fit(s: &str, width: usize) -> String {
     let mut used = 0;
@@ -882,8 +1179,9 @@ fn registers(editor: &mut Editor, a: &Args) {
             flux_view::RegisterKind::Line => ('l', format!("{}\n", reg.text)),
             flux_view::RegisterKind::Block => ('b', reg.text.clone()),
         };
-        let line = format!("  {kind}  \"{name}   {}", printable(&text));
-        lines.push(fit(&line, width - 1));
+        let prefix = format!("  {kind}  \"{name}   ");
+        let room = (width - 1).saturating_sub(prefix.chars().count());
+        lines.push(format!("{prefix}{}", fit_printable(&text, room)));
     }
     let command = if args.is_empty() {
         "reg".to_string()

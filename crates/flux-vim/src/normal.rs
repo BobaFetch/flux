@@ -106,6 +106,12 @@ impl Engine {
                 }
                 done
             }
+            Action::RepeatSubstitute { all } => {
+                // Like the Ex command it runs, not repeated by `.`.
+                let _ = dot;
+                ex::run(self, editor, if all { "%s//~/&" } else { "s" });
+                true
+            }
             Action::Insert(at) => {
                 self.recording = Some(dot);
                 self.start_insert(editor, at, count.unwrap_or(1));
@@ -129,6 +135,7 @@ impl Engine {
             | Action::Replace(_)
             | Action::Join { .. }
             | Action::ToggleCase
+            | Action::RepeatSubstitute { .. }
             | Action::Insert(_) => unreachable!("handled in run"),
             Action::Undo => self.undo(editor, count.unwrap_or(1), false),
             Action::Redo => self.undo(editor, count.unwrap_or(1), true),
@@ -141,11 +148,12 @@ impl Engine {
                     Some(n) => editor.cmdline.push_str(&format!(".,.+{}", n - 1)),
                     None => {}
                 }
+                editor.cmdline_pos = editor.cmdline.chars().count();
             }
             Action::Scroll(s) => scroll(editor, s, count),
             Action::FileInfo => file_info(editor),
-            Action::WriteQuit => ex::execute(editor, "x"),
-            Action::QuitDiscard => ex::execute(editor, "q!"),
+            Action::WriteQuit => ex::run(self, editor, "x"),
+            Action::QuitDiscard => ex::run(self, editor, "q!"),
             Action::Redraw => {}
             Action::SetMark(name) => {
                 let cur = editor.cursor();
@@ -224,13 +232,16 @@ impl Engine {
         }
     }
 
-    fn motion(
-        &self,
-        editor: &Editor,
+    pub(crate) fn motion(
+        &mut self,
+        editor: &mut Editor,
         motion: Motion,
         count: Option<usize>,
         pending: Pending,
     ) -> Option<Target> {
+        if motion.is_search() {
+            return self.search_motion(editor, motion, count, pending);
+        }
         motion::eval(
             motion,
             &Context {
@@ -368,8 +379,10 @@ impl Engine {
             );
             if editor.text().has_no_lines() {
                 editor.info("--No lines in buffer--");
-            } else if let Some(msg) = util::more_lines_message(-(count as isize)) {
-                editor.info(msg);
+            } else if let Some(msg) =
+                util::more_lines_message(-(count as isize), editor.options.report)
+            {
+                editor.more_info(msg);
             }
         } else {
             let (from, to) = char_range(editor, &r);
@@ -384,8 +397,8 @@ impl Engine {
             normalize_cursor(editor);
             set_want(editor, Want::Column);
             let lines = deleted.matches('\n').count();
-            if let Some(msg) = util::more_lines_message(-(lines as isize)) {
-                editor.info(msg);
+            if let Some(msg) = util::more_lines_message(-(lines as isize), editor.options.report) {
+                editor.more_info(msg);
             }
         }
     }
@@ -414,7 +427,7 @@ impl Engine {
                 .registers
                 .delete(register, Register::new(text, RegisterKind::Line), true);
             let first = util::line(editor, r.start.line);
-            let indent = if editor.options.autoindent {
+            let indent = if editor.buf_opts().autoindent {
                 util::indent_of(&first).to_string()
             } else {
                 String::new()
@@ -442,8 +455,8 @@ impl Engine {
     }
 
     pub(crate) fn shift(&mut self, editor: &mut Editor, first: usize, last: usize, right: bool) {
-        let sw = editor.options.shiftwidth;
-        let ts = editor.options.tabstop;
+        let sw = editor.buf_opts().sw();
+        let ts = editor.buf_opts().tabstop;
         for line in first..=last {
             let s = util::line(editor, line);
             if s.is_empty() {
@@ -456,7 +469,7 @@ impl Engine {
             } else {
                 width.saturating_sub(sw)
             };
-            let new_indent = util::make_indent(new, &editor.options);
+            let new_indent = util::make_indent(new, editor.buf_opts());
             if new_indent != indent {
                 let start = editor.text().line_start(line);
                 let end = start + indent.chars().count();
@@ -468,9 +481,10 @@ impl Engine {
             editor.metrics().col_for_vcol(first, editor.window.curswant),
         );
         let n = last - first + 1;
-        if n > 2 {
+        if n > editor.options.report {
             editor.info(format!(
-                "{n} lines {}ed 1 time",
+                "{} {}ed 1 time",
+                util::lines(n),
                 if right { '>' } else { '<' }
             ));
         }
@@ -506,8 +520,8 @@ impl Engine {
         normalize_cursor(editor);
         set_want(editor, Want::Column);
         let n = r.end.line - r.start.line + 1;
-        if n > 2 {
-            editor.info(format!("{n} lines changed"));
+        if n > editor.options.report {
+            editor.info(format!("{} changed", util::lines(n)));
         }
     }
 
@@ -553,8 +567,8 @@ impl Engine {
                 let marks = &mut editor.current_buffer_mut().marks;
                 marks.set('[', pos(at_line, 0));
                 marks.set(']', pos(at_line + added - 1, usize::MAX));
-                if let Some(msg) = util::more_lines_message(added as isize) {
-                    editor.info(msg);
+                if let Some(msg) = util::more_lines_message(added as isize, editor.options.report) {
+                    editor.more_info(msg);
                 }
             }
             RegisterKind::Char => {
@@ -581,8 +595,8 @@ impl Engine {
                     pos(cur.line, chars::prev_grapheme(&s, col + len))
                 };
                 let added = reg.text.matches('\n').count() * count;
-                if let Some(msg) = util::more_lines_message(added as isize) {
-                    editor.info(msg);
+                if let Some(msg) = util::more_lines_message(added as isize, editor.options.report) {
+                    editor.more_info(msg);
                 }
             }
         }
@@ -728,7 +742,7 @@ impl Engine {
     pub(crate) fn open_line(&mut self, editor: &mut Editor, below: bool) -> usize {
         let cur = editor.cursor();
         let s = util::line(editor, cur.line);
-        let indent = if editor.options.autoindent {
+        let indent = if editor.buf_opts().autoindent {
             util::indent_of(&s).to_string()
         } else {
             String::new()
@@ -858,8 +872,8 @@ pub(crate) fn yank(editor: &mut Editor, r: Range, register: Option<char>) {
         set_want(editor, Want::Column);
     }
     let lines = r.end.line - r.start.line + 1;
-    if lines > 2 {
-        editor.info(format!("{lines} lines yanked"));
+    if lines > editor.options.report {
+        editor.info(format!("{} yanked", util::lines(lines)));
     }
 }
 
@@ -875,6 +889,9 @@ pub(crate) fn normalize_cursor(editor: &mut Editor) {
 
 /// Remember the cursor as where a jump started: the `''` mark and a jumplist entry.
 pub(crate) fn set_pcmark(editor: &mut Editor) {
+    if editor.global_busy {
+        return;
+    }
     let cur = editor.cursor();
     editor.window.pcmark = Some(cur);
     let buffer = editor.window.buffer;

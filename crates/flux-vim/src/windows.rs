@@ -52,7 +52,7 @@ impl Engine {
                     editor.error("E444: Cannot close last window");
                 }
             }
-            WinCmd::Quit => crate::ex::execute(editor, "quit"),
+            WinCmd::Quit => crate::ex::run(self, editor, "quit"),
             WinCmd::Only => editor.only_window(),
             WinCmd::Next => match count {
                 Some(n) => goto(editor, (n.max(1) - 1).min(ids.len() - 1)),

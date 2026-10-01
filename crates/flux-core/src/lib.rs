@@ -4,10 +4,12 @@ pub mod chars;
 pub mod edit;
 pub mod history;
 pub mod layout;
+pub mod pattern;
 pub mod text;
 
 pub use edit::Edit;
 pub use history::{Change, History, Step};
 pub use layout::{Glyph, GlyphKind, LineLayout, layout_line};
+pub use pattern::{Match, Pattern, PatternError, PatternOptions};
 pub use ropey::Rope;
 pub use text::{LineEnding, Text};

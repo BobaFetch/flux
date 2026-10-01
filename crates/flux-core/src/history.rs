@@ -27,6 +27,9 @@ pub struct Change {
     /// Whether the text had no lines at all before and after (see `Text::has_no_lines`).
     pub no_lines_before: bool,
     pub no_lines_after: bool,
+    /// Lines saved for undo, when not simply `before`/`after` (Vim saves each line `:s`
+    /// changes on its own): the count before and after the change.
+    pub saved_lines: Option<(usize, usize)>,
 }
 
 impl Change {
@@ -208,6 +211,7 @@ mod tests {
             after: a,
             no_lines_before: false,
             no_lines_after: false,
+            saved_lines: None,
         }
     }
 
@@ -236,6 +240,7 @@ mod tests {
             after: 0..0,
             no_lines_before: false,
             no_lines_after: false,
+            saved_lines: None,
         };
         assert!(!h.is_modified());
         h.record(c());

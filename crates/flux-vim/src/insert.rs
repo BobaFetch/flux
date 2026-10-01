@@ -165,7 +165,7 @@ impl Engine {
         let chars: Vec<char> = s.chars().collect();
         let mut left: String = chars[..cur.col.min(chars.len())].iter().collect();
         let right: String = chars[cur.col.min(chars.len())..].iter().collect();
-        let ai = editor.options.autoindent;
+        let ai = editor.buf_opts().autoindent;
         let indent = if ai {
             util::indent_of(&left).to_string()
         } else {
@@ -208,10 +208,23 @@ impl Engine {
         }
         let s = util::line(editor, cur.line);
         let line_start = editor.text().line_start(cur.line);
-        if editor.options.smarttab && util::in_indent(&s, cur.col) {
+        let o = editor.buf_opts();
+        let in_indent = util::in_indent(&s, cur.col);
+        let prev_white = s
+            .chars()
+            .nth(cur.col - 1)
+            .is_some_and(|c| c == ' ' || c == '\t');
+        let step = if editor.options.smarttab && in_indent {
+            o.sw()
+        } else if o.sts() != 0 && prev_white {
+            o.sts()
+        } else {
+            0
+        };
+        if step > 0 {
             let m = editor.metrics();
             let vcol = m.vcol_of(cur.line, cur.col);
-            let sw = editor.options.shiftwidth.max(1);
+            let sw = step.max(1);
             let want = (vcol - 1) / sw * sw;
             let mut col = cur.col;
             while col > 0 && m.vcol_of(cur.line, col) > want {
@@ -272,7 +285,7 @@ impl Engine {
         let chars: Vec<char> = s.chars().collect();
         let start = self.state().start;
         let mut min_col = 0;
-        if !word && editor.options.autoindent {
+        if !word && editor.buf_opts().autoindent {
             let first = util::skip_white(&s);
             if first < cur.col {
                 min_col = first;
@@ -305,18 +318,23 @@ impl Engine {
         set_want(editor, Want::Column);
     }
 
-    /// `<Tab>`: a tab character, or with 'expandtab' spaces to the next stop ('shiftwidth' in the
-    /// indent with 'smarttab', 'tabstop' elsewhere).
+    /// `<Tab>` (Vim's `ins_tab`): white space to the next stop — 'shiftwidth' in the indent
+    /// with 'smarttab', else 'softtabstop', else 'tabstop'. Without 'expandtab' the white
+    /// space before the cursor is then made of as many tabs as fit.
     fn tab(&mut self, editor: &mut Editor) {
-        let o = &editor.options;
-        if !o.expandtab {
+        let o = editor.buf_opts().clone();
+        let cur = editor.cursor();
+        let s = util::line(editor, cur.line);
+        let in_indent = util::in_indent(&s, cur.col);
+        let smart = editor.options.smarttab && in_indent;
+        if !o.expandtab && !(smart && o.sw() != o.tabstop) && o.sts() == 0 {
             self.insert_text(editor, "\t");
             return;
         }
-        let cur = editor.cursor();
-        let s = util::line(editor, cur.line);
-        let step = if o.smarttab && util::in_indent(&s, cur.col) {
-            o.shiftwidth
+        let step = if smart {
+            o.sw()
+        } else if o.sts() != 0 {
+            o.sts()
         } else {
             o.tabstop
         }
@@ -324,6 +342,36 @@ impl Engine {
         let vcol = editor.metrics().vcol_of(cur.line, cur.col);
         let spaces = step - vcol % step;
         self.insert_text(editor, &" ".repeat(spaces));
+        if o.expandtab {
+            return;
+        }
+        // Rebuild the white space before the cursor with tabs where they fit.
+        let cur = editor.cursor();
+        let s = util::line(editor, cur.line);
+        let chars: Vec<char> = s.chars().collect();
+        let mut start = cur.col;
+        while start > 0 && matches!(chars[start - 1], ' ' | '\t') {
+            start -= 1;
+        }
+        let m = editor.metrics();
+        let (from, to) = (m.vcol_of(cur.line, start), m.vcol_of(cur.line, cur.col));
+        let ts = o.tabstop.max(1);
+        let mut white = String::new();
+        let mut v = from;
+        while (v / ts + 1) * ts <= to {
+            white.push('\t');
+            v = (v / ts + 1) * ts;
+        }
+        white.push_str(&" ".repeat(to - v));
+        let old: String = chars[start..cur.col].iter().collect();
+        if white != old {
+            let line_start = editor.text().line_start(cur.line);
+            self.edit(
+                editor,
+                Edit::replace(line_start + start..line_start + cur.col, white.clone()),
+            );
+            editor.window.cursor.col = start + white.chars().count();
+        }
     }
 
     /// `CTRL-T` / `CTRL-D`: shift the current line by 'shiftwidth', keeping the cursor on the
@@ -333,15 +381,17 @@ impl Engine {
         let s = util::line(editor, cur.line);
         let indent = util::indent_of(&s);
         let indent_len = indent.chars().count();
-        let width = util::indent_width(&s, editor.options.tabstop);
-        let sw = editor.options.shiftwidth.max(1);
+        let width = util::indent_width(&s, editor.buf_opts().tabstop);
+        let sw = editor.buf_opts().sw().max(1);
         let new = if right {
             (width / sw + 1) * sw
         } else {
             width.saturating_sub(1) / sw * sw
         };
-        let new_indent =
-            util::make_indent(if !right && width == 0 { 0 } else { new }, &editor.options);
+        let new_indent = util::make_indent(
+            if !right && width == 0 { 0 } else { new },
+            editor.buf_opts(),
+        );
         let start = editor.text().line_start(cur.line);
         let new_len = new_indent.chars().count();
         self.edit(editor, Edit::replace(start..start + indent_len, new_indent));

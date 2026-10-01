@@ -5,7 +5,7 @@ use flux_view::{Editor, Mode, Register, RegisterKind, Visual, VisualKind};
 
 use crate::engine::{Dot, Engine, VisualDot};
 use crate::key::Key;
-use crate::motion::{self, Context, Kind, Pending, Want};
+use crate::motion::{self, Kind, Pending, Want};
 use crate::normal::{Range, char_range, normalize_cursor, set_pcmark, set_want, yank};
 use crate::parse::{self, Operator, VisualAction, VisualCommand, VisualParse};
 use crate::textobj;
@@ -22,6 +22,8 @@ impl Engine {
     }
 
     pub(crate) fn visual_key(&mut self, editor: &mut Editor, key: Key) {
+        // A message shown over the mode (after a search) lasts until the next key.
+        editor.message = None;
         self.visual_pending.push(key);
         match parse::parse_visual(&self.visual_pending) {
             VisualParse::Incomplete => {}
@@ -32,6 +34,12 @@ impl Engine {
             VisualParse::Done(cmd) => {
                 self.visual_pending.clear();
                 editor.with_window(|win, m| win.update_curswant(m, false));
+                if self.search_input.is_none()
+                    && let VisualAction::Move(motion::Motion::Search { forward }) = cmd.action
+                {
+                    self.start_search(editor, forward, crate::search::PendingSearch::Visual(cmd));
+                    return;
+                }
                 self.run_visual(editor, cmd);
                 if editor.mode != Mode::Insert {
                     self.commit(editor);
@@ -45,7 +53,7 @@ impl Engine {
         &self.visual_pending
     }
 
-    fn run_visual(&mut self, editor: &mut Editor, cmd: VisualCommand) {
+    pub(crate) fn run_visual(&mut self, editor: &mut Editor, cmd: VisualCommand) {
         let VisualCommand {
             register,
             count,
@@ -54,15 +62,7 @@ impl Engine {
         } = cmd;
         match action {
             VisualAction::Move(m) => {
-                let t = motion::eval(
-                    m,
-                    &Context {
-                        editor,
-                        count,
-                        pending: Pending::None,
-                        last_find: self.last_find,
-                    },
-                );
+                let t = self.motion(editor, m, count, Pending::None);
                 match t {
                     Some(t) => {
                         if let motion::Motion::Find(f) = m {
@@ -194,6 +194,7 @@ impl Engine {
                 self.exit_visual(editor);
                 self.enter_cmdline(editor);
                 editor.cmdline = "'<,'>".into();
+                editor.cmdline_pos = 5;
             }
             VisualAction::Scroll(s) => {
                 editor.with_window(|win, m| {
@@ -231,6 +232,7 @@ impl Engine {
         };
         editor.window.cursor = clamp(editor, cursor);
         editor.mode = Mode::Visual;
+        editor.message = None;
         if eol {
             editor.window.curswant = usize::MAX;
             editor.window.set_curswant = false;
@@ -358,10 +360,10 @@ impl Engine {
                 }
                 let n = range.end.line - range.start.line + 1;
                 let times = count.unwrap_or(1);
-                if n > 2 {
+                if n > editor.options.report {
                     let dir = if op == Operator::ShiftRight { '>' } else { '<' };
                     let plural = if times == 1 { "time" } else { "times" };
-                    editor.info(format!("{n} lines {dir}ed {times} {plural}"));
+                    editor.info(format!("{} {dir}ed {times} {plural}", util::lines(n)));
                 }
                 editor.window.set_curswant = true;
             }
@@ -462,6 +464,7 @@ impl Engine {
             kind: v.kind,
         };
         editor.mode = Mode::Visual;
+        editor.message = None;
         let last = editor.text().last_line();
         let line = (cur.line + v.lines - 1).min(last);
         if v.kind == VisualKind::Line {

@@ -69,6 +69,19 @@ pub enum Motion {
         name: char,
         exact: bool,
     },
+    /// `/` and `?`: the pattern is typed on the command line.
+    Search {
+        forward: bool,
+    },
+    /// `n` and `N` (`reverse`).
+    SearchNext {
+        reverse: bool,
+    },
+    /// `*`, `#` (`whole` word) and `g*`, `g#`.
+    SearchWord {
+        forward: bool,
+        whole: bool,
+    },
 }
 
 impl Motion {
@@ -85,6 +98,16 @@ impl Motion {
                 | Motion::WindowMiddle
                 | Motion::WindowBottom
                 | Motion::Mark { .. }
+                | Motion::Search { .. }
+                | Motion::SearchNext { .. }
+        )
+    }
+
+    /// Motions that search, which the engine runs itself.
+    pub fn is_search(self) -> bool {
+        matches!(
+            self,
+            Motion::Search { .. } | Motion::SearchNext { .. } | Motion::SearchWord { .. }
         )
     }
 }
@@ -357,6 +380,7 @@ pub fn eval(motion: Motion, cx: &Context) -> Option<Target> {
                 Some(target(pos(line, col), Kind::Linewise, Want::Column))
             }
         }
+        Motion::Search { .. } | Motion::SearchNext { .. } | Motion::SearchWord { .. } => None,
         Motion::WindowTop | Motion::WindowMiddle | Motion::WindowBottom => {
             let m = editor.metrics();
             let win = &editor.window;
