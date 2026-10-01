@@ -1,0 +1,7 @@
+alpha beta gamma
+	tab	indented line
+beta again and beta
+
+ctrl char:  here
+a very long line that goes on and on so that it wraps around the edge of the window, past eighty columns
+last line

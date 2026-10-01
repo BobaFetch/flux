@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ropey::{Rope, RopeSlice};
 
@@ -20,7 +21,44 @@ pub enum LineEnding {
     Crlf,
 }
 
-#[derive(Debug, Clone)]
+/// A position for a parser: the line, and the byte offset within it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BytePoint {
+    pub row: usize,
+    pub col: usize,
+}
+
+/// An edit in bytes and byte points, as incremental parsers (tree-sitter) want it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByteEdit {
+    pub start_byte: usize,
+    pub old_end_byte: usize,
+    pub new_end_byte: usize,
+    pub start: BytePoint,
+    pub old_end: BytePoint,
+    pub new_end: BytePoint,
+}
+
+/// The edits made to a [`Text`] since they were last taken, for keeping a parse tree in step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Edits {
+    /// The text was made from these edits, in order.
+    Known(Vec<ByteEdit>),
+    /// The text is not the one last seen (or too many edits were made): start over.
+    Unknown,
+}
+
+/// Edits kept for a reader at most; past this nobody is reading them, and a fresh parse is
+/// cheaper than replaying them anyway.
+const MAX_LOGGED_EDITS: usize = 10_000;
+
+static NEXT_TEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_id() -> u64 {
+    NEXT_TEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+#[derive(Debug)]
 pub struct Text {
     rope: Rope,
     line_ending: LineEnding,
@@ -28,6 +66,24 @@ pub struct Text {
     /// The buffer has no lines at all, as opposed to one empty line: an empty file, or after
     /// deleting every line. Vim writes such a buffer as an empty file.
     no_lines: bool,
+    /// Identifies this text's line of edits: a new or cloned text gets a new id, so a reader
+    /// that followed another one knows to start over.
+    id: u64,
+    /// Edits since the last [`Text::take_edits`], or `None` if they were too many to keep.
+    edits: Option<Vec<ByteEdit>>,
+}
+
+impl Clone for Text {
+    fn clone(&self) -> Self {
+        Self {
+            rope: self.rope.clone(),
+            line_ending: self.line_ending,
+            final_eol: self.final_eol,
+            no_lines: self.no_lines,
+            id: next_id(),
+            edits: Some(Vec::new()),
+        }
+    }
 }
 
 impl Default for Text {
@@ -37,6 +93,8 @@ impl Default for Text {
             line_ending: LineEnding::Lf,
             final_eol: true,
             no_lines: true,
+            id: next_id(),
+            edits: Some(Vec::new()),
         }
     }
 }
@@ -58,7 +116,31 @@ impl Text {
             line_ending,
             final_eol,
             no_lines: contents.is_empty(),
+            id: next_id(),
+            edits: Some(Vec::new()),
         }
+    }
+
+    /// Which text this is (see [`Text::take_edits`]).
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// The edits made since the last call, for a reader that last saw this text (by
+    /// [`Text::id`]) then.
+    pub fn take_edits(&mut self) -> Edits {
+        match self.edits.replace(Vec::new()) {
+            Some(edits) => Edits::Known(edits),
+            None => Edits::Unknown,
+        }
+    }
+
+    /// Where char index `idx` is, as a byte offset and a byte point.
+    fn byte_point(&self, idx: usize) -> (usize, BytePoint) {
+        let byte = self.rope.char_to_byte(idx);
+        let row = self.rope.byte_to_line(byte);
+        let col = byte - self.rope.line_to_byte(row);
+        (byte, BytePoint { row, col })
     }
 
     pub fn rope(&self) -> &Rope {
@@ -145,9 +227,27 @@ impl Text {
     pub fn apply(&mut self, edit: &Edit) -> Edit {
         let end = edit.at + edit.delete;
         let removed = self.rope.slice(edit.at..end).to_string();
+        let logged = self.edits.is_some();
+        let before = logged.then(|| (self.byte_point(edit.at), self.byte_point(end)));
         self.rope.remove(edit.at..end);
         self.rope.insert(edit.at, &edit.insert);
         self.no_lines = false;
+        if let Some(((start_byte, start), (old_end_byte, old_end))) = before {
+            let (new_end_byte, new_end) = self.byte_point(edit.at + edit.insert.chars().count());
+            let log = self.edits.as_mut().expect("logged");
+            if log.len() < MAX_LOGGED_EDITS {
+                log.push(ByteEdit {
+                    start_byte,
+                    old_end_byte,
+                    new_end_byte,
+                    start,
+                    old_end,
+                    new_end,
+                });
+            } else {
+                self.edits = None;
+            }
+        }
         Edit {
             at: edit.at,
             delete: edit.insert.chars().count(),
@@ -203,6 +303,35 @@ mod tests {
         (0..text.line_count())
             .map(|i| text.line_str(i).into_owned())
             .collect()
+    }
+
+    #[test]
+    fn edits_are_logged_in_bytes() {
+        let mut text = Text::new("héllo\nwörld\n");
+        assert_eq!(text.take_edits(), Edits::Known(vec![]));
+        text.apply(&Edit::replace(8..9, "OO\nx"));
+        let Edits::Known(edits) = text.take_edits() else {
+            panic!("known");
+        };
+        assert_eq!(
+            edits,
+            [ByteEdit {
+                start_byte: 10,
+                old_end_byte: 11,
+                new_end_byte: 14,
+                start: BytePoint { row: 1, col: 3 },
+                old_end: BytePoint { row: 1, col: 4 },
+                new_end: BytePoint { row: 2, col: 1 },
+            }]
+        );
+        assert_eq!(text.take_edits(), Edits::Known(vec![]));
+        let copy = text.clone();
+        assert_ne!(copy.id(), text.id());
+        for _ in 0..=MAX_LOGGED_EDITS {
+            text.apply(&Edit::insert(0, "a"));
+        }
+        assert_eq!(text.take_edits(), Edits::Unknown);
+        assert_eq!(text.take_edits(), Edits::Known(vec![]));
     }
 
     #[test]

@@ -30,10 +30,9 @@ impl Renderer {
         cursor: Option<(usize, usize)>,
     ) -> io::Result<()> {
         queue!(out, BeginSynchronizedUpdate, Hide)?;
-        let previous = self
-            .previous
-            .take()
-            .filter(|p| p.width() == grid.width() && p.height() == grid.height());
+        let previous = self.previous.take().filter(|p| {
+            p.width() == grid.width() && p.height() == grid.height() && p.default == grid.default
+        });
         if previous.is_none() {
             queue!(out, SetAttribute(Attribute::Reset), Clear(ClearType::All))?;
         }
@@ -56,9 +55,10 @@ impl Renderer {
                 if at != Some((x, y)) {
                     queue!(out, MoveTo(x as u16, y as u16))?;
                 }
-                if style != Some(cell.style) {
-                    apply_style(out, cell.style)?;
-                    style = Some(cell.style);
+                let cell_style = with_default(cell.style, grid.default);
+                if style != Some(cell_style) {
+                    apply_style(out, cell_style)?;
+                    style = Some(cell_style);
                 }
                 queue!(out, Print(&cell.symbol))?;
                 at = Some((x + usize::from(cell.width), y));
@@ -76,6 +76,23 @@ impl Renderer {
     }
 }
 
+/// `style` with its `Reset` colors replaced by the grid's default ones.
+fn with_default(style: Style, default: Style) -> Style {
+    Style {
+        fg: if style.fg == Color::Reset {
+            default.fg
+        } else {
+            style.fg
+        },
+        bg: if style.bg == Color::Reset {
+            default.bg
+        } else {
+            style.bg
+        },
+        ..style
+    }
+}
+
 fn apply_style(out: &mut impl Write, style: Style) -> io::Result<()> {
     queue!(
         out,
@@ -85,8 +102,11 @@ fn apply_style(out: &mut impl Write, style: Style) -> io::Result<()> {
     )?;
     for (on, attribute) in [
         (style.bold, Attribute::Bold),
-        (style.reverse, Attribute::Reverse),
+        (style.italic, Attribute::Italic),
         (style.underline, Attribute::Underlined),
+        (style.undercurl, Attribute::Undercurled),
+        (style.strikethrough, Attribute::CrossedOut),
+        (style.reverse, Attribute::Reverse),
     ] {
         if on {
             queue!(out, SetAttribute(attribute))?;
@@ -119,7 +139,7 @@ fn term_color(color: Color) -> TermColor {
         Color::Ansi(n) => ANSI
             .get(usize::from(n))
             .copied()
-            .unwrap_or(TermColor::Reset),
+            .unwrap_or(TermColor::AnsiValue(n)),
         Color::Rgb(r, g, b) => TermColor::Rgb { r, g, b },
     }
 }
@@ -149,6 +169,21 @@ mod tests {
         let second = frame(&mut renderer, &grid);
         assert!(second.contains('Z'));
         assert!(!second.contains("hello"));
+    }
+
+    #[test]
+    fn default_colors_fill_in_and_force_a_redraw() {
+        let mut renderer = Renderer::default();
+        let mut grid = Grid::new(4, 1);
+        grid.put_str(0, 0, "ab", Style::default());
+        frame(&mut renderer, &grid);
+        grid.default = Style {
+            bg: Color::Rgb(1, 2, 3),
+            ..Style::default()
+        };
+        let out = frame(&mut renderer, &grid);
+        assert!(out.contains("ab"), "{out:?}");
+        assert!(out.contains("48;2;1;2;3"), "{out:?}");
     }
 
     #[test]

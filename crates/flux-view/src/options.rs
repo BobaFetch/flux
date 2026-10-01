@@ -8,6 +8,10 @@ pub struct BufferOptions {
     pub softtabstop: isize,
     pub expandtab: bool,
     pub autoindent: bool,
+    /// 'filetype': set when a file is read (see [`crate::filetype`]), or by `:set ft=`.
+    pub filetype: String,
+    /// 'matchpairs': the brackets MatchParen (and `%`) pair up, as `(:),{:},[:]`.
+    pub matchpairs: String,
 }
 
 impl Default for BufferOptions {
@@ -18,6 +22,8 @@ impl Default for BufferOptions {
             softtabstop: 0,
             expandtab: false,
             autoindent: true,
+            filetype: String::new(),
+            matchpairs: "(:),{:},[:]".into(),
         }
     }
 }
@@ -74,6 +80,11 @@ pub struct Options {
     pub splitright: bool,
     pub gdefault: bool,
     pub report: usize,
+    /// 'background': `dark` or `light`, which colors the default colorscheme uses.
+    pub background: String,
+    /// 'termguicolors': 24-bit colors. flux turns it on when `$COLORTERM` says the terminal
+    /// has them, as Neovim does.
+    pub termguicolors: bool,
     pub buffer: BufferOptions,
     pub window: WindowOptions,
 }
@@ -92,6 +103,8 @@ impl Default for Options {
             splitright: false,
             gdefault: false,
             report: 2,
+            background: "dark".into(),
+            termguicolors: false,
             buffer: BufferOptions::default(),
             window: WindowOptions::default(),
         }
@@ -109,6 +122,7 @@ pub enum Scope {
 pub enum Kind {
     Bool,
     Number,
+    String,
 }
 
 /// An option's description.
@@ -132,12 +146,15 @@ const fn def(name: &'static str, short: &'static str, kind: Kind, scope: Scope) 
 /// Every option flux implements, in alphabetical order (as `:set all` lists them).
 pub const OPTIONS: &[OptionDef] = &[
     def("autoindent", "ai", Kind::Bool, Scope::Buffer),
+    def("background", "bg", Kind::String, Scope::Global),
     def("expandtab", "et", Kind::Bool, Scope::Buffer),
+    def("filetype", "ft", Kind::String, Scope::Buffer),
     def("gdefault", "gd", Kind::Bool, Scope::Global),
     def("hidden", "hid", Kind::Bool, Scope::Global),
     def("hlsearch", "hls", Kind::Bool, Scope::Global),
     def("ignorecase", "ic", Kind::Bool, Scope::Global),
     def("incsearch", "is", Kind::Bool, Scope::Global),
+    def("matchpairs", "mps", Kind::String, Scope::Buffer),
     def("number", "nu", Kind::Bool, Scope::Window),
     def("numberwidth", "nuw", Kind::Number, Scope::Window),
     def("relativenumber", "rnu", Kind::Bool, Scope::Window),
@@ -149,6 +166,7 @@ pub const OPTIONS: &[OptionDef] = &[
     def("splitbelow", "sb", Kind::Bool, Scope::Global),
     def("splitright", "spr", Kind::Bool, Scope::Global),
     def("tabstop", "ts", Kind::Number, Scope::Buffer),
+    def("termguicolors", "tgc", Kind::Bool, Scope::Global),
     def("wrapscan", "ws", Kind::Bool, Scope::Global),
 ];
 
@@ -160,10 +178,11 @@ pub fn find(name: &str) -> Option<&'static OptionDef> {
 }
 
 /// A value, as `:set` handles it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Bool(bool),
     Number(i64),
+    String(String),
 }
 
 impl Options {
@@ -182,6 +201,8 @@ impl Options {
             "splitright" => Value::Bool(self.splitright),
             "gdefault" => Value::Bool(self.gdefault),
             "report" => Value::Number(self.report as i64),
+            "background" => Value::String(self.background.clone()),
+            "termguicolors" => Value::Bool(self.termguicolors),
             _ => return b.get(name).or_else(|| w.get(name)),
         })
     }
@@ -199,8 +220,10 @@ impl Options {
             ("splitright", Value::Bool(x)) => self.splitright = x,
             ("gdefault", Value::Bool(x)) => self.gdefault = x,
             ("report", Value::Number(x)) => self.report = x.max(0) as usize,
-            _ => {
-                self.buffer.set(name, v);
+            ("background", Value::String(x)) => self.background = x,
+            ("termguicolors", Value::Bool(x)) => self.termguicolors = x,
+            (_, v) => {
+                self.buffer.set(name, v.clone());
                 self.window.set(name, v);
             }
         }
@@ -215,6 +238,8 @@ impl BufferOptions {
             "softtabstop" => Value::Number(self.softtabstop as i64),
             "expandtab" => Value::Bool(self.expandtab),
             "autoindent" => Value::Bool(self.autoindent),
+            "filetype" => Value::String(self.filetype.clone()),
+            "matchpairs" => Value::String(self.matchpairs.clone()),
             _ => return None,
         })
     }
@@ -226,6 +251,8 @@ impl BufferOptions {
             ("softtabstop", Value::Number(x)) => self.softtabstop = x as isize,
             ("expandtab", Value::Bool(x)) => self.expandtab = x,
             ("autoindent", Value::Bool(x)) => self.autoindent = x,
+            ("filetype", Value::String(x)) => self.filetype = x,
+            ("matchpairs", Value::String(x)) => self.matchpairs = x,
             _ => {}
         }
     }

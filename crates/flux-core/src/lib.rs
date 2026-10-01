@@ -12,4 +12,4 @@ pub use history::{Change, History, Step};
 pub use layout::{Glyph, GlyphKind, LineLayout, layout_line};
 pub use pattern::{Match, Pattern, PatternError, PatternOptions};
 pub use ropey::Rope;
-pub use text::{LineEnding, Text};
+pub use text::{ByteEdit, BytePoint, Edits, LineEnding, Text};

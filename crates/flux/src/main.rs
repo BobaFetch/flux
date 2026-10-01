@@ -36,6 +36,9 @@ fn main() -> Result<()> {
 
     let (width, height) = crossterm::terminal::size()?;
     let mut editor = Editor::new(width.into(), height.into());
+    // Neovim turns on 'termguicolors' when the terminal says it has 24-bit color.
+    editor.options.termguicolors =
+        std::env::var("COLORTERM").is_ok_and(|v| matches!(v.as_str(), "truecolor" | "24bit"));
     editor.open_args(&files);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -59,6 +62,8 @@ async fn run(mut editor: Editor) -> Result<()> {
     let mut prompt_base: Option<Grid> = None;
 
     loop {
+        editor.update_syntax();
+        editor.update_matchparen();
         let (width, height) = editor.screen_size();
         let same_size = |g: &Grid| g.width() == width && g.height() == height;
         let (grid, cursor) = if editor.hit_enter {

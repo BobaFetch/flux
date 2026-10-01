@@ -41,7 +41,12 @@ fn put(editor: &mut Editor, def: &OptionDef, which: Which, v: Value) {
         Scope::Global => editor.options.set_global(name, v),
         Scope::Buffer => {
             if which != Which::Global {
-                editor.current_buffer_mut().opts.set(name, v);
+                editor.current_buffer_mut().opts.set(name, v.clone());
+                // Like Vim's FileType event: the filetype's settings and parser follow.
+                if name == "filetype" {
+                    let id = editor.window.buffer;
+                    editor.apply_filetype(id);
+                }
             }
             if which != Which::Local {
                 editor.options.buffer.set(name, v);
@@ -49,7 +54,7 @@ fn put(editor: &mut Editor, def: &OptionDef, which: Which, v: Value) {
         }
         Scope::Window => {
             if which != Which::Global {
-                editor.window.opts.set(name, v);
+                editor.window.opts.set(name, v.clone());
             }
             if which != Which::Local {
                 editor.options.window.set(name, v);
@@ -70,6 +75,7 @@ fn show(editor: &Editor, def: &OptionDef, which: Which) -> String {
         Value::Bool(true) => format!("  {}", def.name),
         Value::Bool(false) => format!("no{}", def.name),
         Value::Number(n) => format!("  {}={n}", def.name),
+        Value::String(s) => format!("  {}={s}", def.name),
     }
 }
 
@@ -154,9 +160,12 @@ fn set_one(editor: &mut Editor, arg: &str, which: Which) -> Result<Option<String
     if prefix.is_some() {
         return Err(invalid());
     }
+    if def.kind == Kind::String {
+        return set_string(editor, def, which, arg, op);
+    }
     let current = match get(editor, def, which) {
         Value::Number(n) => n,
-        Value::Bool(_) => 0,
+        Value::Bool(_) | Value::String(_) => 0,
     };
     let value = match op {
         "" | "?" => return Ok(Some(show(editor, def, which))),
@@ -202,6 +211,56 @@ fn set_one(editor: &mut Editor, arg: &str, which: Which) -> Result<Option<String
     Ok(None)
 }
 
+/// A string option: `=`, `+=` (append), `^=` (prepend), `-=` (remove), `?`, `&`.
+fn set_string(
+    editor: &mut Editor,
+    def: &OptionDef,
+    which: Which,
+    arg: &str,
+    op: &str,
+) -> Result<Option<String>, String> {
+    let current = match get(editor, def, which) {
+        Value::String(s) => s,
+        _ => String::new(),
+    };
+    let value = match op {
+        "" | "?" => return Ok(Some(show(editor, def, which))),
+        "&" | "&vim" | "&vi" => match default_value(def) {
+            Value::String(s) => s,
+            _ => String::new(),
+        },
+        _ => {
+            if let Some(v) = op.strip_prefix("+=") {
+                format!("{current}{v}")
+            } else if let Some(v) = op.strip_prefix("^=") {
+                format!("{v}{current}")
+            } else if let Some(v) = op.strip_prefix("-=") {
+                current.replacen(v, "", 1)
+            } else if let Some(v) = op.strip_prefix(['=', ':']) {
+                v.to_string()
+            } else {
+                return Err(format!("E474: Invalid argument: {arg}"));
+            }
+        }
+    };
+    let valid = match def.name {
+        "background" => matches!(value.as_str(), "dark" | "light"),
+        "filetype" => value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')),
+        "matchpairs" => {
+            value.is_empty()
+                || flux_view::matchparen::pairs(&value).len() == value.split(',').count()
+        }
+        _ => true,
+    };
+    if !valid {
+        return Err(format!("E474: Invalid argument: {arg}"));
+    }
+    put(editor, def, which, Value::String(value));
+    Ok(None)
+}
+
 /// `:set` (the options that differ from their default) and `:set all`, laid out like Vim's
 /// `showoptions`: short items in columns of 20, then long ones one per line.
 fn show_options(editor: &mut Editor, all: bool, which: Which) {
@@ -217,10 +276,9 @@ fn show_options(editor: &mut Editor, all: bool, which: Which) {
         .filter(|d| all || get(editor, d, which) != default_value(d))
         .map(|d| {
             let s = show(editor, d, which);
-            let len = if d.kind == Kind::Bool {
-                1
-            } else {
-                s.len() - 2 + 1
+            let len = match d.kind {
+                Kind::Bool => 1,
+                Kind::Number | Kind::String => s.len() - 2 + 1,
             };
             (s, len)
         })

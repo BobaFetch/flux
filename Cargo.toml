@@ -15,6 +15,7 @@ authors = ["Andrew Riggs <andrew@yonaka.dev>"]
 flux-core = { path = "crates/flux-core", version = "0.0.1" }
 flux-view = { path = "crates/flux-view", version = "0.0.1" }
 flux-vim = { path = "crates/flux-vim", version = "0.0.1" }
+flux-syntax = { path = "crates/flux-syntax", version = "0.0.1" }
 flux-tui = { path = "crates/flux-tui", version = "0.0.1" }
 
 anyhow = "1.0.104"

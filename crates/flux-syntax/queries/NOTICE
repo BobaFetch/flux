@@ -1,0 +1,14 @@
+Tree-sitter queries vendored into flux
+======================================
+
+The `.scm` files in this directory come from two Apache-2.0 projects and are used under the
+Apache License, Version 2.0 (see LICENSE-APACHE at the root of this repository).
+
+- c, lua, markdown, markdown_inline: Neovim's runtime (runtime/queries), as shipped with
+  Neovim 0.12.5. Copyright Neovim contributors. https://github.com/neovim/neovim
+- bash, ecma, javascript, json, jsx, python, rust, toml, tsx, typescript: nvim-treesitter,
+  commit 910fdf6f49e9dee7e7257c7d11a76b040fdfb9de (2026-09-30).
+  Copyright nvim-treesitter contributors. https://github.com/nvim-treesitter/nvim-treesitter
+
+The files are unmodified. flux rewrites `#set!` to `#nvim-set!` when loading them, because
+tree-sitter's own `#set!` doesn't accept Neovim's capture arguments.

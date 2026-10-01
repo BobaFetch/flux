@@ -58,6 +58,8 @@ pub struct Buffer {
     /// The buffer lists a directory (see [`crate::explorer`]). It can't be changed or written,
     /// and isn't listed by `:ls`.
     pub directory: bool,
+    /// The parser for the buffer's filetype, if flux has one.
+    pub syntax: Option<flux_syntax::Syntax>,
     disk: Option<DiskState>,
 }
 
@@ -78,6 +80,7 @@ impl Buffer {
             last_visual: None,
             opts: Default::default(),
             directory: false,
+            syntax: None,
             disk: None,
         }
     }
