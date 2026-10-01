@@ -379,11 +379,9 @@ pub(crate) fn preview(editor: &Editor, line: &str, botline: usize) -> Option<flu
         flags,
         Some(botline),
     );
-    // With a replacement, the cursor goes to the first changed line.
-    let first_match = matches.first().map(|m| Cursor {
-        line: to_cursor(text, m.start).line,
-        col: 0,
-    });
+    // With a replacement, the cursor goes to the first match (Neovim's incsearch position,
+    // which its statusline shows during the preview).
+    let first_match = matches.first().map(|m| to_cursor(text, m.start));
     let mut new_text = text.clone();
     let mut highlights = Vec::new();
     let mut delta = 0isize;

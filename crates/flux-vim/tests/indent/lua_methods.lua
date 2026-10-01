@@ -1,0 +1,30 @@
+local Obj = {}
+Obj.__index = Obj
+
+function Obj:new(o)
+  o = o or {}
+  setmetatable(o, self)
+  return o
+end
+
+function Obj.static()
+  return nil
+end
+
+local x = Obj:new({
+  name = "x",
+})
+
+local y = foo(
+  1,
+  2
+)
+
+for k, v in pairs(Obj) do -- loop
+  print(k, v)
+end
+
+while x do x = nil end
+
+local f = function() return 1 end
+return { x = x, y = y, f = f }

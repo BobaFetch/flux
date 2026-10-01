@@ -1,0 +1,20 @@
+ifn main() {
+keys: Enter
+let v = vec![
+keys: Enter
+1,
+keys: Enter
+];
+keys: Enter
+for x in v.iter() {
+keys: Enter
+println!("{x}");
+keys: Enter
+}
+keys: Enter
+}
+keys: Escape
+O// A comment that continues
+keys: Enter
+onto the next line
+keys: Escape

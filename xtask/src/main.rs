@@ -1,4 +1,5 @@
-//! Project automation. `cargo xtask oracle gen|check` runs the Vim test cases through real Neovim.
+//! Project automation. `cargo xtask oracle gen|check` runs the Vim test cases through real Neovim;
+//! `cargo xtask colors gen|check` takes Neovim's default colorscheme for flux.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -7,14 +8,22 @@ use std::{env, fs};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+mod indent;
+mod screens;
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["oracle", "gen"] => oracle_gen(),
         ["oracle", "check"] => oracle_check(),
+        ["colors", "gen"] => colors_gen(),
+        ["colors", "check"] => colors_check(),
+        ["screens"] => screens::screens(),
+        ["indent", "gen"] => indent::gen_expected(),
+        ["indent", "check"] => indent::check(),
         _ => bail!(
-            "usage: cargo xtask oracle gen    # rewrite expected.json from Neovim\n       cargo xtask oracle check  # verify expected.json still matches Neovim"
+            "usage: cargo xtask oracle gen    # rewrite expected.json from Neovim\n       cargo xtask oracle check  # verify expected.json still matches Neovim\n       cargo xtask colors gen    # rewrite flux's default colors from Neovim's\n       cargo xtask colors check  # verify they still match Neovim's\n       cargo xtask screens       # compare highlighted screens with Neovim's (needs tmux)\n       cargo xtask indent gen    # rewrite the indent corpus expectations from Neovim\n       cargo xtask indent check  # verify they still match Neovim"
         ),
     }
 }
@@ -107,5 +116,51 @@ fn oracle_check() -> Result<()> {
         );
     }
     println!("all {} expectations match {}", fresh.len(), nvim_version());
+    Ok(())
+}
+
+fn colors_path() -> PathBuf {
+    root().join("crates/flux-view/src/colors.json")
+}
+
+/// Neovim's default colorscheme, as `xtask/colors.lua` dumps it.
+fn dump_colors() -> Result<String> {
+    let nvim = nvim_bin();
+    let out = env::temp_dir().join(format!("flux-colors-{}.json", std::process::id()));
+    let output = Command::new(&nvim)
+        .args(["--headless", "--clean", "-l"])
+        .arg(root().join("xtask/colors.lua"))
+        .arg(&out)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("running {nvim}; install Neovim or set NVIM_BIN"))?;
+    if !output.status.success() {
+        bail!(
+            "{nvim} exited with {}:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let json = fs::read_to_string(&out)?;
+    fs::remove_file(&out).ok();
+    Ok(json)
+}
+
+#[allow(clippy::print_stdout)]
+fn colors_gen() -> Result<()> {
+    fs::write(colors_path(), dump_colors()?)?;
+    println!("wrote {} ({})", colors_path().display(), nvim_version());
+    Ok(())
+}
+
+#[allow(clippy::print_stdout)]
+fn colors_check() -> Result<()> {
+    if fs::read_to_string(colors_path())? != dump_colors()? {
+        bail!(
+            "colors.json is out of date with {}. Run `cargo xtask colors gen`.",
+            nvim_version()
+        );
+    }
+    println!("colors.json matches {}", nvim_version());
     Ok(())
 }

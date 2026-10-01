@@ -1,0 +1,31 @@
+#![allow(dead_code)]
+
+/// A documented struct.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// The name.
+    pub name: String,
+    #[allow(unused)]
+    pub level: u8,
+}
+
+impl Config {
+#[must_use]
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            level: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+#[test]
+    fn makes() {
+        let c = Config::new("x");
+        assert_eq!(c.level, 0);
+    }
+}

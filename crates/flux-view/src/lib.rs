@@ -3,8 +3,11 @@
 pub mod buffer;
 pub mod editor;
 pub mod explorer;
+pub mod filetype;
+pub mod highlight;
 pub mod layout;
 pub mod marks;
+pub mod matchparen;
 pub mod options;
 pub mod registers;
 pub mod search;

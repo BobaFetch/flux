@@ -8,7 +8,7 @@ use flux_view::Editor;
 use flux_vim::{Engine, parse_keys};
 use serde_json::Value;
 
-const MILESTONE: u64 = 4;
+const MILESTONE: u64 = 5;
 /// Neovim's headless screen; the text area is 80x22 once the statusline and command line are
 /// taken.
 const SCREEN: (usize, usize) = (80, 24);
@@ -130,11 +130,15 @@ fn pair(v: &Value) -> (usize, usize) {
 fn run_case(case: &Value, expected: &Value) -> Vec<String> {
     let text = input_text(case);
     let mut editor = Editor::new(SCREEN.0, SCREEN.1);
-    let _dir = if case.get("layout").is_some() {
-        // Like the oracle: a directory holding `main.txt` and the case's other files, opened
-        // from that directory.
+    let _dir = if case.get("layout").is_some() || case.get("file").is_some() {
+        // Like the oracle: a directory holding `main.txt` (or the file the case names, for its
+        // filetype) and the case's other files, opened from that directory.
         let dir = tempdir(case["id"].as_str().unwrap());
-        std::fs::write(dir.join("main.txt"), format!("{text}\n")).unwrap();
+        let main = case
+            .get("file")
+            .and_then(Value::as_str)
+            .unwrap_or("main.txt");
+        std::fs::write(dir.join(main), format!("{text}\n")).unwrap();
         if let Some(files) = case.get("files").and_then(Value::as_object) {
             for (name, contents) in files {
                 std::fs::write(dir.join(name), format!("{}\n", contents.as_str().unwrap()))
@@ -142,7 +146,7 @@ fn run_case(case: &Value, expected: &Value) -> Vec<String> {
             }
         }
         editor.cwd = dir.clone();
-        editor.open(std::path::Path::new("main.txt"));
+        editor.open(std::path::Path::new(main));
         Some(dir)
     } else {
         // Loading from a file: the text is newline-terminated, like the oracle's temp file.

@@ -1,0 +1,14 @@
+/**
+ * A documented function.
+ * @param x the input
+ */
+export function documented(x: number): number {
+	// A line comment.
+	/* A block comment. */
+	return x; // trailing
+}
+
+/*
+ * A multi-line block comment.
+ */
+const after = 1;

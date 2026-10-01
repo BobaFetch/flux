@@ -1,0 +1,50 @@
+#!/bin/sh
+# Control flow.
+set -e
+
+if [ -f "$1" ]; then
+	echo "file"
+elif [ -d "$1" ]
+then
+	echo "dir"
+else
+	echo "neither"
+fi
+
+if true; then echo one; fi
+echo after
+
+for f in a b c; do
+	if [ "$f" = b ]; then
+		continue
+	fi
+	echo "$f"
+done
+
+for i in 1 2 3
+do
+	echo "$i"
+done
+
+while read -r line; do
+	case "$line" in
+		"") break ;;
+	esac
+	echo "$line"
+done < input.txt
+
+until [ "$n" -ge 3 ]; do
+	n=$((n + 1))
+done
+
+count=0
+while true
+do
+	count=$((count + 1))
+	if [ $count -gt 3 ]
+	then
+		break
+	else
+		:
+	fi
+done

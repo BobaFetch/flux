@@ -1,0 +1,45 @@
+return_value = 1
+def top():
+    return 1
+return_value = 2
+if x: y = 1
+else: y = 2
+z = "a # not a comment:"
+w = 'colon at end:'
+for i in range(3): print(i)
+else:
+    pass
+@decorator(
+        arg=1,
+        )
+def decorated():
+    data = {k: v
+            for k, v in items()}
+fn = lambda a: a + 1
+try:
+    try:
+        risky()
+except KeyError:
+    raise
+except Exception:
+    return None
+if a:
+    if b:
+        c()
+elif d:
+    e()
+s = """
+text
+
+more text
+"""
+return s
+
+
+class Empty:
+    pass
+
+
+class WithBase(Base,
+               Mixin):
+    x = 1

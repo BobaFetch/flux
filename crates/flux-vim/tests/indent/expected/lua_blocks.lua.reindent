@@ -1,0 +1,49 @@
+local M = {}
+
+function M.setup(opts)
+	opts = opts or {}
+	if opts.enable then
+		for i = 1, 10 do
+			print(i)
+		end
+	elseif opts.other then
+		while true do
+			break
+		end
+	else
+		repeat
+			opts.n = opts.n - 1
+		until opts.n == 0
+	end
+	return opts
+end
+
+local function helper(a, b)
+	local t = {
+		a = a,
+		b = {
+			c = b,
+		},
+		"list",
+	}
+	return t
+end
+
+local cb = function(x)
+	return x * 2
+end
+
+M.list = vim.tbl_map(function(v)
+	return v + 1
+end, { 1, 2, 3 })
+
+do
+	local x = 1
+end
+
+if a then b() end
+local s = "if this then"
+-- a comment with function(
+	print(helper(1,
+	2))
+	return M

@@ -63,10 +63,12 @@ end
 local out = {}
 local root = vim.fn.tempname()
 for i, case in ipairs(cases) do
-  -- Each case gets its own directory holding `main.txt` and any extra files it names.
+  -- Each case gets its own directory holding `main.txt` (or the file it names, for its
+  -- filetype) and any extra files it names.
   local dir = root .. "/" .. i
   vim.fn.mkdir(dir, "p")
-  local tmp = dir .. "/main.txt"
+  local main = case.file or "main.txt"
+  local tmp = dir .. "/" .. main
   local input = case_lines(case)
   vim.fn.writefile(input, tmp)
   for name, contents in pairs(case.files or {}) do
@@ -78,7 +80,7 @@ for i, case in ipairs(cases) do
   vim.cmd("cd " .. vim.fn.fnameescape(dir))
   -- Start each case like a fresh `:edit`, which puts line 1 in the jumplist.
   vim.cmd("clearjumps")
-  vim.cmd("silent edit! main.txt")
+  vim.cmd("silent edit! " .. main)
   for _, r in ipairs({ '"', "a", "b", "q", "0", "1", "2", "3", "-" }) do
     vim.fn.setreg(r, "")
   end

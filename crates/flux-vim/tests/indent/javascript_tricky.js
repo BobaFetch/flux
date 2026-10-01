@@ -1,0 +1,64 @@
+function tricky(a, b) {
+  if (a &&
+    b) {
+    run();
+  }
+  if (a)
+    if (b)
+      both();
+    else
+      one();
+  for (const k in obj)
+    if (obj[k])
+      count++;
+  const parts = line.split(/,\s*/);
+  const ratio = total /
+    count;
+  const product = width
+    * height;
+  const x = y // trailing comment
+    + z;
+  outer: for (const i of list) {
+    if (i) continue outer;
+  }
+  const s = "a string"
+    + "another";
+  return a
+    ? b
+    : c;
+}
+
+const fn = async () => {
+  await Promise.all([
+    load(),
+    save(),
+  ]);
+};
+
+module.exports = {
+  tricky,
+  fn,
+};
+
+const obj2 = {
+  a: 1,
+  b: [
+    { c: 2 },
+    { d: 3 },
+  ],
+};
+
+if (ready) {
+  // A comment inside.
+  go(); /* inline */
+}
+
+const deep = a.b.c
+  .d()
+  .e();
+
+let i = 0;
+while (i < 10) i++;
+label: {
+  break label;
+}

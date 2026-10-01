@@ -107,6 +107,12 @@ pub struct Editor {
     pub preview: Option<Preview>,
     pub message: Option<Message>,
     pub options: Options,
+    /// `:syntax on` / `:syntax off`.
+    pub syntax_on: bool,
+    /// `:filetype` detection, plugin and indent.
+    pub filetype: crate::filetype::FiletypeSettings,
+    /// The brackets MatchParen highlights in the current window (see [`crate::matchparen`]).
+    pub matchparen: Option<[Cursor; 2]>,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
@@ -194,6 +200,9 @@ impl Editor {
             preview: None,
             message: None,
             options: Options::default(),
+            syntax_on: true,
+            filetype: Default::default(),
+            matchparen: None,
             registers: Registers::default(),
             hit_enter: false,
             more_top: None,
@@ -322,6 +331,7 @@ impl Editor {
                 buffer.positions = std::mem::take(&mut current.positions);
                 buffer.opts = current.opts.clone();
                 *current = buffer;
+                self.detect_filetype(id);
             }
             Err(e) => self.error(format!("\"{}\" {e}", path.display())),
         }
@@ -349,7 +359,9 @@ impl Editor {
                 if !buffer.directory {
                     buffer.path = Some(path.to_path_buf());
                 }
-                self.add_buffer(buffer)
+                let id = self.add_buffer(buffer);
+                self.detect_filetype(id);
+                id
             }
         };
         self.show_buffer(id);
@@ -397,11 +409,16 @@ impl Editor {
             self.window.pcmark = Some(cursor);
         }
         if let Some(buffer) = self.buffer_mut(id) {
+            let was_loaded = buffer.loaded;
             let loaded = buffer.load();
             buffer.listed = !buffer.directory;
-            if let Err(e) = loaded {
-                let name = buffer.name();
-                self.error(format!("\"{name}\" {e}"));
+            match loaded {
+                Err(e) => {
+                    let name = buffer.name();
+                    self.error(format!("\"{name}\" {e}"));
+                }
+                Ok(()) if !was_loaded => self.detect_filetype(id),
+                Ok(()) => {}
             }
         }
         self.window.alt_buffer = Some(old);

@@ -1,14 +1,17 @@
 //! The Vim modal engine: keys in, editor state changes out. No IO except Ex commands that read
 //! and write files.
 
+mod comments;
 pub mod engine;
 pub mod ex;
 mod ex_lines;
 mod global;
+mod indent;
 mod insert;
 pub mod key;
 pub mod motion;
 mod normal;
+mod open_line;
 pub mod parse;
 mod search;
 mod set;

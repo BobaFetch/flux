@@ -8,18 +8,23 @@ pub enum Color {
     /// The terminal's default.
     #[default]
     Reset,
-    /// One of the 16 basic terminal colors, so the user's terminal theme applies.
+    /// A terminal color number: the 16 basic colors (which follow the terminal's theme), or
+    /// one of the 256.
     Ansi(u8),
     Rgb(u8, u8, u8),
 }
 
+/// How a cell looks. A `Reset` color is the grid's default (Neovim's Normal group).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
     pub fg: Color,
     pub bg: Color,
     pub bold: bool,
-    pub reverse: bool,
+    pub italic: bool,
     pub underline: bool,
+    pub undercurl: bool,
+    pub strikethrough: bool,
+    pub reverse: bool,
 }
 
 impl Style {
@@ -28,8 +33,27 @@ impl Style {
             fg: color,
             bg: Color::Reset,
             bold: false,
-            reverse: false,
+            italic: false,
             underline: false,
+            undercurl: false,
+            strikethrough: false,
+            reverse: false,
+        }
+    }
+
+    /// `top` drawn over `self`, as Neovim combines highlights (`hl_combine_attr`): its colors
+    /// replace ours where it has them, and attributes add up.
+    pub fn combine(self, top: Style) -> Style {
+        let pick = |a: Color, b: Color| if b == Color::Reset { a } else { b };
+        Style {
+            fg: pick(self.fg, top.fg),
+            bg: pick(self.bg, top.bg),
+            bold: self.bold || top.bold,
+            italic: self.italic || top.italic,
+            underline: self.underline || top.underline,
+            undercurl: self.undercurl || top.undercurl,
+            strikethrough: self.strikethrough || top.strikethrough,
+            reverse: self.reverse || top.reverse,
         }
     }
 }
@@ -40,6 +64,8 @@ pub struct Cell {
     /// 1, or 2 for a wide character. 0 marks the right half of the wide character to its left.
     pub width: u8,
     pub style: Style,
+    /// The URL the cell links to (an OSC 8 hyperlink).
+    pub link: Option<std::sync::Arc<str>>,
 }
 
 impl Default for Cell {
@@ -48,6 +74,7 @@ impl Default for Cell {
             symbol: " ".into(),
             width: 1,
             style: Style::default(),
+            link: None,
         }
     }
 }
@@ -57,6 +84,8 @@ pub struct Grid {
     width: usize,
     height: usize,
     cells: Vec<Cell>,
+    /// The colors a cell's `Reset` colors stand for.
+    pub default: Style,
 }
 
 impl Grid {
@@ -65,6 +94,7 @@ impl Grid {
             width,
             height,
             cells: vec![Cell::default(); width * height],
+            default: Style::default(),
         }
     }
 
@@ -92,6 +122,7 @@ impl Grid {
                 symbol: " ".into(),
                 width: 1,
                 style,
+                link: None,
             };
             return;
         }
@@ -99,6 +130,7 @@ impl Grid {
             symbol: symbol.to_owned(),
             width,
             style,
+            link: None,
         };
         if width == 2 {
             self.clear_wide_neighbors(x + 1, y);
@@ -106,7 +138,15 @@ impl Grid {
                 symbol: String::new(),
                 width: 0,
                 style,
+                link: None,
             };
+        }
+    }
+
+    /// Make the cell at `(x, y)` a link to `url`.
+    pub fn set_link(&mut self, x: usize, y: usize, url: Option<std::sync::Arc<str>>) {
+        if x < self.width && y < self.height {
+            self.cells[y * self.width + x].link = url;
         }
     }
 

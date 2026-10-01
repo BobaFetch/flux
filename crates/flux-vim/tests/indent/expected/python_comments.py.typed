@@ -1,0 +1,20 @@
+# A comment at the top.
+def f(x):  # trailing comment with :
+    # A comment line.
+    y = x + 1  # note: colon here
+    if y:  # comment
+        return y
+    # Another comment.
+    return 0
+
+
+def g():
+    s = """a string
+    that spans lines
+    and keeps its indent"""
+    t = 'single'
+    return s + t
+
+
+x = {"key": "value",  # comment (with paren
+     "other": 2}

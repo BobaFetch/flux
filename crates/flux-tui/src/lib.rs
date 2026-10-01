@@ -4,6 +4,7 @@
 pub mod draw;
 pub mod grid;
 pub mod renderer;
+pub mod theme;
 
 pub use draw::draw;
 pub use grid::{Cell, Color, Grid, Style};

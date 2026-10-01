@@ -1,0 +1,21 @@
+{
+  "name": "flux",
+  "list": [1, 2, 3],
+  "empty_obj": {},
+  "empty_arr": [],
+  "nested": {
+    "a": {
+      "b": [
+        {"c": 1},
+        {
+          "d": [true, false, null]
+        }
+      ]
+    }
+  },
+  "brackets": "a string with { and [ in it",
+  "matrix": [
+    [1, 2],
+    [3, 4]
+  ]
+}

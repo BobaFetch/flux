@@ -4,9 +4,11 @@ use flux_core::{Edit, chars};
 use flux_view::{Editor, Mode, RegisterKind};
 
 use crate::engine::{CtrlO, Dot, Engine};
+use crate::indent::{self, Typed, When};
 use crate::key::{Key, KeyCode, Modifiers};
 use crate::motion::Want;
 use crate::normal::{normalize_cursor, set_want};
+use crate::open_line::OpenFlags;
 use crate::parse::InsertAt;
 use crate::util::{self, Pos, pos};
 
@@ -26,7 +28,12 @@ pub(crate) struct Insert {
     start: Pos,
     /// A line whose indent was added automatically and that nothing has been typed on yet. The
     /// indent is removed again if the line is left empty.
-    ai_line: Option<usize>,
+    pub(crate) ai_line: Option<usize>,
+    /// Typing this first on a line that got a comment's middle leader ends the comment
+    /// ('comments' flag `x`, Vim's `end_comment_pending`).
+    pub(crate) end_comment_pending: Option<char>,
+    /// The width of the line when the insert started ('formatoptions' `l`).
+    pub(crate) start_textlen: usize,
     /// Keys typed, to repeat them for a count.
     typed: Vec<Key>,
     /// The text inserted, for the `".` register.
@@ -43,6 +50,8 @@ impl Insert {
             count: count.max(1),
             start,
             ai_line,
+            end_comment_pending: None,
+            start_textlen: 0,
             typed: Vec::new(),
             inserted: String::new(),
             prefix: None,
@@ -123,10 +132,210 @@ impl Engine {
             | KeyCode::Down
             | KeyCode::Home
             | KeyCode::End => self.arrow(editor, key.code),
-            KeyCode::Char(c) if key.mods == Modifiers::NONE => {
-                self.insert_text(editor, &c.to_string())
-            }
+            _ if ctrl('f') => self.ctrl_f(editor),
+            KeyCode::Char(c) if key.mods == Modifiers::NONE => self.insert_char(editor, c),
             _ => {}
+        }
+    }
+
+    /// A typed character, which may reindent the line before or after it goes in
+    /// ('indentkeys').
+    fn insert_char(&mut self, editor: &mut Editor, c: char) {
+        let cindent = indent::cindent_on(editor);
+        let cur = editor.cursor();
+        let white = util::in_indent(&util::line(editor, cur.line), cur.col);
+        let typed = Typed::Char(c);
+        if cindent && indent::in_cinkeys(editor, typed, When::Instead, white) {
+            self.reindent_typed(editor);
+            return;
+        }
+        if cindent && indent::in_cinkeys(editor, typed, When::Before, white) {
+            self.reindent_typed(editor);
+        }
+        self.auto_format(editor, c);
+        self.end_comment(editor, c);
+        self.insert_text(editor, &c.to_string());
+        if cindent && indent::in_cinkeys(editor, typed, When::After, white) {
+            self.reindent_typed(editor);
+        }
+    }
+
+    /// Reindent the line being typed; one left blank keeps its indent only until something
+    /// else is typed (Vim's `fixthisline` setting `did_ai`).
+    fn reindent_typed(&mut self, editor: &mut Editor) {
+        if self.fix_this_line(editor) {
+            let line = editor.cursor().line;
+            self.state().ai_line = Some(line);
+        }
+    }
+
+    /// Auto-wrap at 'textwidth' before inserting `c` (Vim's `insertchar` and
+    /// `internal_format`): with 'formatoptions' `t` for text and `c` for comments, the line is
+    /// broken at the last blank before the margin, continuing the comment leader.
+    fn auto_format(&mut self, editor: &mut Editor, c: char) {
+        let o = editor.buf_opts().clone();
+        let tw = o.textwidth;
+        if tw == 0 || util::is_white(c) {
+            return;
+        }
+        let fo = o.formatoptions.clone();
+        let ins = self.state();
+        let (start, start_textlen) = (ins.start, ins.start_textlen);
+        // 'formatoptions' `l`: a line already too long when the insert started isn't broken.
+        if editor.cursor().line == start.line && fo.contains('l') && start_textlen > tw {
+            return;
+        }
+        let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+        let mut no_leader = false;
+        loop {
+            let cur = editor.cursor();
+            let m = editor.metrics();
+            if m.vcol_of(cur.line, cur.col) + cw <= tw {
+                break;
+            }
+            let do_comments = !no_leader && fo.contains('c');
+            let line: Vec<char> = util::line(editor, cur.line).chars().collect();
+            let s: String = line.iter().collect();
+            // Don't break before the end of the comment leader.
+            let leader_len = if do_comments {
+                let (mut l, _) = crate::comments::leader_len(&o.comments, &s, false, true);
+                if l == 0
+                    && o.cindent
+                    && let Some(cs) = crate::comments::check_linecomment(&s)
+                {
+                    let (l2, _) = crate::comments::leader_len(&o.comments, &s[cs..], false, true);
+                    if l2 != 0 {
+                        l = cs + l2;
+                    }
+                }
+                s[..l].chars().count()
+            } else {
+                0
+            };
+            if leader_len == 0 {
+                no_leader = true;
+            }
+            if leader_len == 0 && !fo.contains('t') {
+                break;
+            }
+            let startcol = cur.col;
+            if startcol == 0 {
+                break;
+            }
+            let wantcol = m.col_for_vcol(cur.line, tw);
+            // Find the blank to break at: the last one before the margin.
+            let at = |i: usize| {
+                if i == startcol {
+                    c
+                } else {
+                    line.get(i).copied().unwrap_or('\0')
+                }
+            };
+            let mut i = startcol;
+            let mut foundcol = 0;
+            loop {
+                let mut cc = at(i);
+                if util::is_white(cc) {
+                    while i > 0 && util::is_white(cc) {
+                        i -= 1;
+                        cc = at(i);
+                    }
+                    if i == 0 && util::is_white(cc) {
+                        break;
+                    }
+                    if i < leader_len {
+                        break;
+                    }
+                    i += 1;
+                    foundcol = i;
+                    if i <= wantcol {
+                        break;
+                    }
+                }
+                if i == 0 {
+                    break;
+                }
+                i -= 1;
+            }
+            if foundcol == 0 {
+                break;
+            }
+            // The cursor's offset into the text that moves to the new line.
+            let mut word = foundcol;
+            while word < line.len() && util::is_white(line[word]) {
+                word += 1;
+            }
+            let offset = startcol.saturating_sub(word);
+            editor.window.cursor.col = foundcol;
+            let opened = self.open_line_vim(
+                editor,
+                OpenFlags {
+                    insert: true,
+                    do_com: Some(do_comments),
+                    del_spaces: true,
+                    ..OpenFlags::default()
+                },
+            );
+            if opened.end_comment_pending.is_some() || leader_len > 0 {
+                no_leader = false;
+            }
+            let len = editor.text().line_len(opened.line);
+            editor.window.cursor.col = (editor.cursor().col + offset).min(len);
+            self.state().ai_line = None;
+        }
+    }
+
+    /// Typing the last character of a comment's end first on a line that got the middle
+    /// leader replaces the middle leader with the end (`*` then `/` makes `*/`).
+    fn end_comment(&mut self, editor: &mut Editor, c: char) {
+        let cur = editor.cursor();
+        let ins = self.state();
+        let pending = ins.end_comment_pending.take();
+        if pending != Some(c) || ins.ai_line != Some(cur.line) {
+            return;
+        }
+        let com = editor.buf_opts().comments.clone();
+        let parts = crate::comments::parts(&com);
+        let line = util::line(editor, cur.line);
+        let (len, k) = crate::comments::leader_len(&com, &line, false, true);
+        let Some(k) = k.filter(|&k| len > 0 && parts[k].has('m')) else {
+            return;
+        };
+        let middle = parts[k].string.trim_end_matches([' ', '\t']);
+        let Some(end) = parts.get(k + 1).map(|p| p.string) else {
+            return;
+        };
+        let b = line.as_bytes();
+        let bcol = line
+            .char_indices()
+            .nth(cur.col)
+            .map_or(line.len(), |(i, _)| i);
+        let mut j = bcol;
+        while j > 0 && (b[j - 1] == b' ' || b[j - 1] == b'\t') {
+            j -= 1;
+        }
+        if j < middle.len() || !end.ends_with(c) {
+            return;
+        }
+        let j = j - middle.len();
+        let start = editor.text().line_start(cur.line);
+        let from = start + line[..j].chars().count();
+        let replacement: String = end.chars().take(end.chars().count() - 1).collect();
+        self.edit(
+            editor,
+            Edit::replace(from..start + cur.col, replacement.clone()),
+        );
+        editor.window.cursor.col = line[..j].chars().count() + replacement.chars().count();
+    }
+
+    /// `CTRL-F`: reindent the line when 'indentkeys' has `!^F` (the default).
+    fn ctrl_f(&mut self, editor: &mut Editor) {
+        let cur = editor.cursor();
+        let white = util::in_indent(&util::line(editor, cur.line), cur.col);
+        if indent::cindent_on(editor)
+            && indent::in_cinkeys(editor, Typed::Char('\u{6}'), When::Instead, white)
+        {
+            self.reindent_typed(editor);
         }
     }
 
@@ -156,41 +365,23 @@ impl Engine {
         set_want(editor, Want::Column);
     }
 
-    /// `<CR>`: split the line. With 'autoindent' the new line gets the indent of the text before
-    /// the cursor, and leading blanks of the text after it are dropped. A line that holds only
-    /// autoindent is emptied.
+    /// `<CR>`: split the line (Vim's `open_line`, see [`crate::open_line`]): the new line gets
+    /// the indent and comment leader, and the text after the cursor without its leading
+    /// blanks. A line that holds only an automatic indent is emptied.
     pub(crate) fn newline(&mut self, editor: &mut Editor) {
         let cur = editor.cursor();
-        let s = util::line(editor, cur.line);
-        let chars: Vec<char> = s.chars().collect();
-        let mut left: String = chars[..cur.col.min(chars.len())].iter().collect();
-        let right: String = chars[cur.col.min(chars.len())..].iter().collect();
-        let ai = editor.buf_opts().autoindent;
-        let indent = if ai {
-            util::indent_of(&left).to_string()
-        } else {
-            String::new()
-        };
-        let ai_only = self.insert.as_ref().and_then(|i| i.ai_line) == Some(cur.line)
-            && left.chars().all(util::is_white);
-        if ai_only {
-            left.clear();
-        }
-        let right = if ai {
-            right.trim_start_matches([' ', '\t']).to_string()
-        } else {
-            right
-        };
-        let t = editor.text();
-        let from = t.line_start(cur.line);
-        let to = from + chars.len();
-        self.edit(
+        let did_ai = self.insert.as_ref().and_then(|i| i.ai_line) == Some(cur.line);
+        let opened = self.open_line_vim(
             editor,
-            Edit::replace(from..to, format!("{left}\n{indent}{right}")),
+            OpenFlags {
+                insert: true,
+                did_ai,
+                ..OpenFlags::default()
+            },
         );
-        editor.window.cursor = pos(cur.line + 1, indent.chars().count());
         if let Some(ins) = self.insert.as_mut() {
-            ins.ai_line = (!indent.is_empty()).then_some(cur.line + 1);
+            ins.ai_line = opened.did_ai.then_some(opened.line);
+            ins.end_comment_pending = opened.end_comment_pending;
             ins.inserted.push('\n');
         }
         set_want(editor, Want::Column);
@@ -478,6 +669,7 @@ impl Engine {
         let cur = editor.cursor();
         let ins = self.state();
         ins.start = cur;
+        ins.start_textlen = cur.col;
         ins.count = 1;
         ins.typed.clear();
         ins.ai_line = None;
@@ -508,9 +700,10 @@ impl Engine {
             self.insert = Some(ins);
             for _ in 0..times {
                 if open {
-                    let line = self.open_line(editor, true);
-                    let indent = editor.cursor().col;
-                    self.state().ai_line = (indent > 0).then_some(line);
+                    let opened = self.open_line_vim(editor, OpenFlags::default());
+                    let ins = self.state();
+                    ins.ai_line = opened.did_ai.then_some(opened.line);
+                    ins.end_comment_pending = opened.end_comment_pending;
                 }
                 for &key in &keys {
                     self.insert_key(editor, key);
@@ -518,14 +711,23 @@ impl Engine {
             }
             ins = self.insert.take().expect("still inserting");
         }
-        // An autoindent that nothing was typed after is removed.
+        // An automatic indent or comment leader that nothing was typed after loses its
+        // trailing blanks (Vim's `stop_insert` with `did_ai`).
         let cur = editor.cursor();
         if ins.ai_line == Some(cur.line) {
-            let s = util::line(editor, cur.line);
-            if !s.is_empty() && s.chars().all(util::is_white) {
-                let start = editor.text().line_start(cur.line);
-                self.edit(editor, Edit::delete(start..start + s.chars().count()));
-                editor.window.cursor.col = 0;
+            let s: Vec<char> = util::line(editor, cur.line).chars().collect();
+            let mut col = cur.col.min(s.len());
+            if col == s.len() && col > 0 {
+                let mut from = col;
+                while from > 0 && util::is_white(s[from - 1]) {
+                    from -= 1;
+                }
+                if from < col {
+                    let start = editor.text().line_start(cur.line);
+                    self.edit(editor, Edit::delete(start + from..start + col));
+                    col = from;
+                }
+                editor.window.cursor.col = col;
             }
         }
         self.commit(editor);
