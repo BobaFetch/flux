@@ -1,0 +1,7 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8", "referencesProvider": true, "implementationProvider": true },
+  "on": {
+    "textDocument/references": { "result": [] },
+    "textDocument/implementation": { "result": null }
+  }
+}

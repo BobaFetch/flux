@@ -127,6 +127,12 @@ pub enum Action {
     },
     /// Neovim's default LSP and diagnostic keys.
     Lsp(LspCmd),
+    /// Keys that run an Ex command with the count (Neovim's `]q`, `[l`, …, and `CTRL-T`):
+    /// with `count1`, a count of 1 when none is given.
+    ExCount {
+        cmd: &'static str,
+        count1: bool,
+    },
 }
 
 /// The keys Neovim maps by default for language servers and diagnostics.
@@ -274,6 +280,29 @@ pub fn parse(keys: &[Key], recording: bool) -> Parse {
     }
 }
 
+/// Neovim's quickfix and location list keys after `]` (`next`) or `[`: `]q` is `:cnext`,
+/// `[Q` `:crewind`, `]<C-Q>` `:cnfile`, and the same with `l` for location lists.
+fn list_key(key: Key, next: bool) -> Option<Action> {
+    let (cmd, count1) = if key == Key::ctrl('q') {
+        (if next { "cnfile" } else { "cpfile" }, true)
+    } else if key == Key::ctrl('l') {
+        (if next { "lnfile" } else { "lpfile" }, true)
+    } else {
+        match (key.typed_char()?, next) {
+            ('q', true) => ("cnext", true),
+            ('q', false) => ("cprevious", true),
+            ('Q', true) => ("clast", false),
+            ('Q', false) => ("crewind", false),
+            ('l', true) => ("lnext", true),
+            ('l', false) => ("lprevious", true),
+            ('L', true) => ("llast", false),
+            ('L', false) => ("lrewind", false),
+            _ => return None,
+        }
+    };
+    Some(Action::ExCount { cmd, count1 })
+}
+
 type Parsed = Option<(Option<char>, Option<usize>, Action)>;
 
 fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
@@ -308,8 +337,16 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
         }
         return Ok(window_command(next).map(|cmd| (register, count, Action::Window(cmd))));
     }
-    if key == Key::ctrl(']') {
+    // Terminals send `CTRL-]` as the byte crossterm reads as `CTRL-5`.
+    if key == Key::ctrl(']') || key == Key::ctrl('5') {
         return Ok(Some((register, count, Action::Lsp(LspCmd::Definition))));
+    }
+    if key == Key::ctrl('t') {
+        let action = Action::ExCount {
+            cmd: "pop",
+            count1: false,
+        };
+        return Ok(Some((register, count, action)));
     }
     let action = match key.typed_char() {
         Some(c) => match c {
@@ -420,12 +457,17 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
             'K' => Some(Action::Lsp(LspCmd::Hover)),
             ']' | '[' => {
                 let next = c == ']';
-                match k.next()?.typed_char() {
-                    Some('d') if next => Some(Action::Lsp(LspCmd::DiagnosticNext)),
-                    Some('d') => Some(Action::Lsp(LspCmd::DiagnosticPrev)),
-                    Some('D') if next => Some(Action::Lsp(LspCmd::DiagnosticLast)),
-                    Some('D') => Some(Action::Lsp(LspCmd::DiagnosticFirst)),
-                    _ => None,
+                let key = k.next()?;
+                if let Some(cmd) = list_key(key, next) {
+                    Some(cmd)
+                } else {
+                    match key.typed_char() {
+                        Some('d') if next => Some(Action::Lsp(LspCmd::DiagnosticNext)),
+                        Some('d') => Some(Action::Lsp(LspCmd::DiagnosticPrev)),
+                        Some('D') if next => Some(Action::Lsp(LspCmd::DiagnosticLast)),
+                        Some('D') => Some(Action::Lsp(LspCmd::DiagnosticFirst)),
+                        _ => None,
+                    }
                 }
             }
             'g' => match k.next()?.typed_char() {

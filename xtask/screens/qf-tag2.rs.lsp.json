@@ -1,0 +1,9 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8", "definitionProvider": true },
+  "on": {
+    "textDocument/definition": { "result": [
+      { "uri": "$URI", "range": { "start": { "line": 6, "character": 8 }, "end": { "line": 6, "character": 9 } } },
+      { "uri": "$URI", "range": { "start": { "line": 0, "character": 3 }, "end": { "line": 0, "character": 10 } } }
+    ] }
+  }
+}

@@ -11,6 +11,7 @@ use crate::engine::Engine;
 
 mod commands;
 mod hover;
+mod locations;
 
 /// Something a server sent.
 pub fn handle_message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Value) {
@@ -180,8 +181,14 @@ fn response(
 /// All the servers asked have answered.
 fn group_done(engine: &mut Engine, editor: &mut Editor, group: flux_view::lsp::Group) {
     let _ = engine;
-    if group.method.as_str() == "textDocument/hover" {
-        hover::show(editor, group);
+    match group.method.as_str() {
+        "textDocument/hover" => hover::show(editor, group),
+        "textDocument/references"
+        | "textDocument/implementation"
+        | "textDocument/typeDefinition"
+        | "textDocument/documentSymbol"
+        | "textDocument/definition" => locations::done(editor, group),
+        _ => {}
     }
 }
 

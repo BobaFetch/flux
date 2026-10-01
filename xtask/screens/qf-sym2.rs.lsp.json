@@ -1,0 +1,18 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-16", "documentSymbolProvider": true },
+  "on": {
+    "textDocument/documentSymbol": { "result": [
+      { "name": "compute", "kind": 12, "detail": "fn(i32, i32) -> i32",
+        "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 2, "character": 1 } },
+        "selectionRange": { "start": { "line": 0, "character": 3 }, "end": { "line": 0, "character": 10 } },
+        "children": [
+          { "name": "a", "kind": 13, "tags": [1],
+            "range": { "start": { "line": 0, "character": 11 }, "end": { "line": 0, "character": 17 } },
+            "selectionRange": { "start": { "line": 0, "character": 11 }, "end": { "line": 0, "character": 12 } } }
+        ] },
+      { "name": "main", "kind": 12,
+        "range": { "start": { "line": 4, "character": 0 }, "end": { "line": 8, "character": 1 } },
+        "selectionRange": { "start": { "line": 4, "character": 3 }, "end": { "line": 4, "character": 7 } } }
+    ] }
+  }
+}

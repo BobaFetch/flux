@@ -17,6 +17,11 @@ impl Engine {
             LspCmd::DiagnosticFirst => diagnostic_jump(editor, -isize::MAX, false),
             LspCmd::DiagnosticFloat => diagnostic_float(editor),
             LspCmd::Hover => super::hover::request(editor),
+            LspCmd::References
+            | LspCmd::Implementation
+            | LspCmd::TypeDefinition
+            | LspCmd::DocumentSymbol
+            | LspCmd::Definition => super::locations::request(editor, cmd),
             _ => {}
         }
     }
