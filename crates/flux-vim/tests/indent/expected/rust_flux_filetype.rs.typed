@@ -1,0 +1,118 @@
+//! Filetype detection (a small part of Neovim's `filetype.lua`) and which parser each
+//! filetype uses.
+
+use std::path::Path;
+
+/// The filetype of `path`, from its name or else its first line (`#!` lines), using Vim's
+/// filetype names.
+pub fn detect(path: &Path, first_line: &str) -> Option<&'static str> {
+    let name = path.file_name()?.to_str()?;
+    let by_name = match name {
+        "Cargo.lock" | "uv.lock" | "Pipfile" | "poetry.lock" => Some("toml"),
+        ".bashrc" | ".bash_profile" | ".bash_logout" | ".bash_aliases" | ".profile"
+            | "PKGBUILD" | "APKBUILD" => Some("sh"),
+            ".luacheckrc" => Some("lua"),
+            _ => None,
+    };
+    if by_name.is_some() {
+        return by_name;
+    }
+    let ext = Path::new(name).extension().and_then(|e| e.to_str());
+    let by_ext = ext.and_then(|ext| match ext {
+        "rs" => Some("rust"),
+        "lua" | "rockspec" => Some("lua"),
+        "toml" => Some("toml"),
+        "json" | "jsonl" | "geojson" | "webmanifest" | "har" => Some("json"),
+        "md" | "markdown" | "mkd" | "mkdn" | "mdwn" | "mdown" => Some("markdown"),
+        "py" | "pyi" | "pyw" | "pyx" | "pxd" | "ptl" | "wsgi" => Some("python"),
+        "sh" | "bash" | "ebuild" | "eclass" | "env" => Some("sh"),
+        "js" | "mjs" | "cjs" | "jsm" | "javascript" | "es" => Some("javascript"),
+        "jsx" => Some("javascriptreact"),
+        "ts" | "mts" | "cts" => Some("typescript"),
+        "tsx" => Some("typescriptreact"),
+        "c" => Some("c"),
+        // Neovim 0.12 takes `.h` files to be C++ (`g:c_syntax_for_h` makes them C).
+        "h" | "hh" | "hpp" | "cpp" | "cc" | "cxx" => Some("cpp"),
+        "txt" | "text" => Some("text"),
+        _ => None,
+    });
+    by_ext.or_else(|| from_shebang(first_line))
+}
+
+/// `#!/usr/bin/env python3` and the like.
+fn from_shebang(line: &str) -> Option<&'static str> {
+    let rest = line.strip_prefix("#!")?;
+    let mut words = rest.split_whitespace();
+    let mut prog = words.next()?.rsplit('/').next()?;
+    if prog == "env" {
+        prog = words.find(|w| !w.starts_with('-'))?;
+    }
+    let prog = prog.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    match prog {
+        "sh" | "bash" | "dash" | "ksh" => Some("sh"),
+        "python" | "pypy" => Some("python"),
+        "lua" | "luajit" => Some("lua"),
+        "node" | "nodejs" | "deno" | "bun" => Some("javascript"),
+        _ => None,
+    }
+}
+
+/// The parser for a filetype, as Neovim's `vim.treesitter.language.get_lang` maps them.
+pub fn lang_for_filetype(filetype: &str) -> Option<&'static str> {
+    let lang = match filetype {
+        "sh" | "bash" => "bash",
+        "javascriptreact" | "javascript" => "javascript",
+        "typescriptreact" => "tsx",
+        other => return crate::lang::names().find(|&n| n == other),
+    };
+    Some(lang)
+}
+
+/// The parser for an injection's language name: a parser or filetype name, or an alias as
+/// written after a Markdown code fence (`js`, `py`, `shell`, ...).
+pub fn lang_for_injection(name: &str) -> Option<&'static str> {
+    let name = name.trim().to_ascii_lowercase();
+    let ft = match name.as_str() {
+        "rs" => "rust",
+        "py" | "python3" => "python",
+        "js" | "node" | "mjs" | "cjs" => "javascript",
+        "jsx" => "javascriptreact",
+        "ts" => "typescript",
+        "shell" | "zsh" | "console" | "shellsession" => "sh",
+        "md" => "markdown",
+        "jsonc" | "json5" => "json",
+        other => other,
+    };
+    lang_for_filetype(ft)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detection() {
+        let d = |p: &str, l: &str| detect(Path::new(p), l);
+        assert_eq!(d("src/main.rs", ""), Some("rust"));
+        assert_eq!(d("Cargo.lock", ""), Some("toml"));
+        assert_eq!(d("a.tsx", ""), Some("typescriptreact"));
+        assert_eq!(d("README.md", ""), Some("markdown"));
+        assert_eq!(d("script", "#!/usr/bin/env python3"), Some("python"));
+        assert_eq!(d("run", "#!/bin/bash -e"), Some("sh"));
+        assert_eq!(d("notes.txt", ""), Some("text"));
+        assert_eq!(d("x.h", ""), Some("cpp"));
+        assert_eq!(d("notes", ""), None);
+        assert_eq!(d("Makefile", ""), None);
+    }
+
+    #[test]
+    fn languages() {
+        assert_eq!(lang_for_filetype("sh"), Some("bash"));
+        assert_eq!(lang_for_filetype("typescriptreact"), Some("tsx"));
+        assert_eq!(lang_for_filetype("rust"), Some("rust"));
+        assert_eq!(lang_for_filetype("text"), None);
+        assert_eq!(lang_for_injection("JS"), Some("javascript"));
+        assert_eq!(lang_for_injection("console"), Some("bash"));
+        assert_eq!(lang_for_injection("haskell"), None);
+    }
+}

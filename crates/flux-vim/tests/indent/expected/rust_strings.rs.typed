@@ -1,0 +1,23 @@
+fn strings() -> String {
+    let a = "one line";
+    let b = "spans
+    lines";
+    let c = r#"raw "quoted"
+    string"#;
+    let d = 'x';
+    let e = "{";
+    let f = '}';
+    let g = "paren (";
+    format!("{a}{b}{c}{d}{e}{f}{g}")
+}
+
+/* A block
+* comment.
+*/
+fn after() {
+    // A line comment
+    // continued.
+    let x = 1; // trailing
+    let y = 2;
+    let _ = x + y;
+}

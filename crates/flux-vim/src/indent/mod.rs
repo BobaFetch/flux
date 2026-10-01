@@ -51,6 +51,8 @@ pub(crate) struct Ctx<'a> {
     pub col: usize,
     /// In Insert mode (Vim's `mode()` is `i`).
     pub insert: bool,
+    /// The cursor is on `lnum`.
+    on_cursor_line: bool,
     syntax: Option<&'a flux_syntax::Syntax>,
     spans: RefCell<HashMap<usize, Vec<flux_syntax::Span>>>,
 }
@@ -71,6 +73,7 @@ impl<'a> Ctx<'a> {
             text: &buffer.text,
             opts: &buffer.opts,
             lnum,
+            on_cursor_line: cur.line == lnum,
             syntax: buffer.syntax.as_ref().filter(|_| editor.syntax_on),
             spans: RefCell::default(),
         }
@@ -85,9 +88,15 @@ impl<'a> Ctx<'a> {
             lnum,
             col: 0,
             insert: false,
+            on_cursor_line: false,
             syntax: None,
             spans: RefCell::default(),
         }
+    }
+
+    /// The cursor's byte column when indenting the cursor line in Insert mode.
+    pub fn cursor_col(&self) -> Option<usize> {
+        (self.insert && self.on_cursor_line).then_some(self.col)
     }
 
     pub fn line_count(&self) -> usize {
@@ -171,7 +180,7 @@ pub(crate) fn get_indent(editor: &Editor, lnum: usize) -> Option<usize> {
     let ctx = Ctx::new(editor, lnum);
     let expr = ctx.opts.indentexpr.as_str();
     if expr.is_empty() {
-        return Some(cindent::get_c_indent(&ctx));
+        return cindent::get_c_indent(&ctx);
     }
     match expr {
         "GetRustIndent(v:lnum)" => rust::indent(&ctx),
@@ -278,9 +287,10 @@ pub(crate) fn in_cinkeys(editor: &Editor, typed: Typed, when: When, line_is_empt
         } else if at(i) == b':' {
             // At the end of a label or case, or of `class::method`.
             if try_match && typed == Typed::Char(':') {
-                if cindent::is_case(&line, false)
-                    || cindent::is_scopedecl(&line)
-                    || cindent::is_label(&line)
+                let ctx = Ctx::new(editor, cur.line);
+                if cindent::is_case(&ctx, &line, false)
+                    || cindent::is_scopedecl(&ctx, &line)
+                    || cindent::is_label(&ctx, &line)
                 {
                     return true;
                 }
@@ -288,9 +298,9 @@ pub(crate) fn in_cinkeys(editor: &Editor, typed: Typed, when: When, line_is_empt
                 if col > 2 && b[col - 1] == b':' && b[col - 2] == b':' {
                     let mut l = line.to_string();
                     l.replace_range(col - 1..col, " ");
-                    if cindent::is_case(&l, false)
-                        || cindent::is_scopedecl(&l)
-                        || cindent::is_label(&l)
+                    if cindent::is_case(&ctx, &l, false)
+                        || cindent::is_scopedecl(&ctx, &l)
+                        || cindent::is_label(&ctx, &l)
                     {
                         return true;
                     }

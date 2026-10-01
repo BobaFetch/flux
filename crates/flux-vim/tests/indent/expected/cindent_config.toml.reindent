@@ -1,0 +1,11 @@
+[server]
+host = "localhost"
+ports = [
+	8080,
+	8081,
+]
+inline = { a = 1, b = [
+	2, 3 ] }
+
+	[[users]]
+	name = "a"

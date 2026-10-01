@@ -1,0 +1,174 @@
+//! Neovim's matchparen plugin: the bracket under the cursor and its match are highlighted with
+//! MatchParen in the current window.
+
+use crate::{Cursor, Editor, Mode};
+
+/// Captures inside which brackets don't count (matchparen's `s_skip` for tree-sitter).
+fn skipped(capture: &str) -> bool {
+    [
+        "string",
+        "character",
+        "singlequote",
+        "escape",
+        "symbol",
+        "comment",
+    ]
+        .iter()
+        .any(|k| capture.contains(k))
+}
+
+/// 'matchpairs' as `(open, close)` pairs.
+pub fn pairs(matchpairs: &str) -> Vec<(char, char)> {
+    matchpairs
+        .split(',')
+        .filter_map(|p| {
+            let mut c = p.chars();
+            match (c.next(), c.next(), c.next(), c.next()) {
+                (Some(a), Some(':'), Some(b), None) => Some((a, b)),
+                _ => None,
+            }
+        })
+    .collect()
+}
+
+impl Editor {
+    /// Find the brackets to highlight, as the plugin does on CursorMoved and TextChanged. The
+    /// highlight stays as it was while the command line is in use.
+    pub fn update_matchparen(&mut self) {
+        if self.mode == Mode::CmdLine {
+            return;
+        }
+        self.matchparen = self.find_matchparen();
+    }
+
+    fn find_matchparen(&self) -> Option<[Cursor; 2]> {
+        let buffer = self.current_buffer();
+        let text = &buffer.text;
+        let pairs = pairs(&buffer.opts.matchpairs);
+        let cur = self.window.cursor;
+        let line: Vec<char> = text.line_str(cur.line).chars().collect();
+        let find = |c: Option<&char>| {
+            let c = *c?;
+            pairs.iter().find_map(|&(o, cl)| {
+                if c == o {
+                    Some((o, cl, true))
+                } else if c == cl {
+                    Some((o, cl, false))
+                } else {
+                    None
+                }
+            })
+        };
+        // In Insert mode the character before the cursor counts too.
+        let (col, (open, close, forward)) = match find(line.get(cur.col)) {
+            Some(p) => (cur.col, p),
+            None if self.mode == Mode::Insert && cur.col > 0 => {
+                (cur.col - 1, find(line.get(cur.col - 1))?)
+            }
+            None => return None,
+        };
+        // The search stays within the lines on screen.
+        let top = self.window.top;
+        let bottom = self.window.bottom(&self.metrics());
+        let spans = match (&buffer.syntax, self.syntax_on) {
+            (Some(s), true) => s.highlights(text, top..bottom + 1),
+            _ => Vec::new(),
+        };
+        let in_skipped = |l: usize, c: usize| {
+            spans
+                .iter()
+                .any(|s| s.line == l && s.start <= c && c < s.end && skipped(s.capture))
+        };
+        // With tree-sitter, matchparen always skips brackets in strings and comments (its
+        // "unless the cursor is in one too" rule is for regex syntax only).
+        let mut depth = 0usize;
+        let mut l = cur.line;
+        let mut chars = line;
+        let mut c = col as isize;
+        loop {
+            c += if forward { 1 } else { -1 };
+            while c < 0 || c as usize >= chars.len() {
+                if forward {
+                    if l >= bottom {
+                        return None;
+                    }
+                    l += 1;
+                    chars = text.line_str(l).chars().collect();
+                    c = 0;
+                    if !chars.is_empty() {
+                        break;
+                    }
+                } else {
+                    if l <= top {
+                        return None;
+                    }
+                    l -= 1;
+                    chars = text.line_str(l).chars().collect();
+                    c = chars.len() as isize - 1;
+                    if !chars.is_empty() {
+                        break;
+                    }
+                }
+            }
+            let ch = chars[c as usize];
+            let (same, other) = if forward {
+                (open, close)
+            } else {
+                (close, open)
+            };
+            if ch != same && ch != other {
+                continue;
+            }
+            if in_skipped(l, c as usize) {
+                continue;
+            }
+            if ch == same {
+                depth += 1;
+            } else if depth == 0 {
+                return Some([
+                    Cursor {
+                        line: cur.line,
+                        col,
+                    },
+                    Cursor {
+                        line: l,
+                        col: c as usize,
+                    },
+                ]);
+            } else {
+                depth -= 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(editor: &mut Editor, line: usize, col: usize) -> Option<[(usize, usize); 2]> {
+        editor.window.cursor = Cursor { line, col };
+        editor.update_syntax();
+        editor.update_matchparen();
+        editor.matchparen.map(|m| m.map(|c| (c.line, c.col)))
+    }
+
+#[test]
+    fn brackets_match_like_matchparen() {
+        let mut editor = Editor::new(80, 24);
+        editor.set_text("f(a, [b], \")\") {\n  x\n}\n");
+        assert_eq!(at(&mut editor, 0, 1), Some([(0, 1), (0, 11)]));
+        assert_eq!(at(&mut editor, 0, 5), Some([(0, 5), (0, 7)]));
+        assert_eq!(at(&mut editor, 0, 15), Some([(0, 15), (2, 0)]));
+        assert_eq!(at(&mut editor, 2, 0), Some([(2, 0), (0, 15)]));
+        assert_eq!(at(&mut editor, 0, 0), None);
+        // With a parser, the `)` in the string is skipped.
+        editor.current_buffer_mut().opts.filetype = "c".into();
+        let id = editor.window.buffer;
+        editor.apply_filetype(id);
+        assert_eq!(at(&mut editor, 0, 1), Some([(0, 1), (0, 13)]));
+        // In Insert mode, the character before the cursor.
+        editor.mode = Mode::Insert;
+        assert_eq!(at(&mut editor, 0, 2), Some([(0, 1), (0, 13)]));
+    }
+}
