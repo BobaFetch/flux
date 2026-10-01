@@ -143,7 +143,7 @@ impl<'a> Ctx<'a> {
         let char_col = s[..col.min(s.len())].chars().count();
         spans
             .iter()
-            .filter(|sp| sp.start <= char_col && char_col < sp.end)
+            .filter(|sp| sp.start <= char_col && char_col < sp.end && !sp.capture.is_empty())
             .map(|sp| sp.capture)
             .collect()
     }

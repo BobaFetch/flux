@@ -23,13 +23,16 @@ const MAX_INJECTION_DEPTH: usize = 3;
 const DEFAULT_PRIORITY: u32 = 100;
 
 /// A highlighted range of a line: chars `start..end` (columns) of line `line`, with the
-/// capture name to look up (`@keyword.function` without the `@`).
+/// capture name to look up (`@keyword.function` without the `@`; empty for a span that only
+/// carries a link), and the URL the text links to (Neovim's `url` metadata, shown as an OSC 8
+/// hyperlink).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {
     pub line: usize,
     pub start: usize,
     pub end: usize,
     pub capture: &'static str,
+    pub url: Option<std::sync::Arc<str>>,
 }
 
 /// A capture in bytes, before sorting into paint order.
@@ -37,6 +40,7 @@ struct ByteSpan {
     range: Range<usize>,
     capture: &'static str,
     priority: u32,
+    url: Option<std::sync::Arc<str>>,
 }
 
 /// A parse tree for one buffer.
@@ -184,14 +188,20 @@ impl Syntax {
             if from >= to {
                 continue;
             }
-            split_lines(text, from..to, s.capture, &mut out);
+            split_lines(text, from..to, s.capture, s.url, &mut out);
         }
         out
     }
 }
 
 /// Split a byte range into per-line char spans.
-fn split_lines(text: &Text, range: Range<usize>, capture: &'static str, out: &mut Vec<Span>) {
+fn split_lines(
+    text: &Text,
+    range: Range<usize>,
+    capture: &'static str,
+    url: Option<std::sync::Arc<str>>,
+    out: &mut Vec<Span>,
+) {
     let rope = text.rope();
     let first = rope.byte_to_line(range.start);
     let last = rope.byte_to_line(range.end);
@@ -217,6 +227,7 @@ fn split_lines(text: &Text, range: Range<usize>, capture: &'static str, out: &mu
                 start: from,
                 end: to,
                 capture,
+                url: url.clone(),
             });
         }
     }
@@ -275,7 +286,24 @@ fn layer(
         }
         let cap = m.captures()[*i];
         let name: &'static str = names[cap.index as usize];
-        if name.starts_with('_') || matches!(name, "spell" | "nospell" | "conceal") {
+        // A link: its URL is a literal, or the text of another capture.
+        let url = pattern
+            .settings
+            .iter()
+            .rev()
+            .find(|s| s.key == "url" && s.capture == Some(cap.index))
+            .and_then(|s| match s.value_capture {
+                Some(c) => m.nodes_for_capture_index(c).next().map(|n| {
+                    let r = offset_range(n, pattern.offset(c), text);
+                    let rope = text.rope();
+                    let end = r.end.min(rope.len_bytes());
+                    String::from(rope.byte_slice(r.start.min(end)..end))
+                }),
+                None => s.value.clone(),
+            })
+            .map(std::sync::Arc::from);
+        let hidden = name.starts_with('_') || matches!(name, "spell" | "nospell" | "conceal");
+        if hidden && url.is_none() {
             continue;
         }
         let priority = pattern
@@ -284,8 +312,9 @@ fn layer(
             .unwrap_or(DEFAULT_PRIORITY);
         out.push(ByteSpan {
             range: offset_range(cap.node, pattern.offset(cap.index), text),
-            capture: name,
+            capture: if hidden { "" } else { name },
             priority,
+            url,
         });
     }
     if depth >= MAX_INJECTION_DEPTH {

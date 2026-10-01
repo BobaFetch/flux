@@ -27,6 +27,8 @@ struct Sgr {
     underline: bool,
     strikethrough: bool,
     reverse: bool,
+    /// An OSC 8 hyperlink's URL.
+    link: Option<String>,
 }
 
 impl fmt::Display for Sgr {
@@ -48,6 +50,9 @@ impl fmt::Display for Sgr {
                 write!(f, " {name}")?;
             }
         }
+        if let Some(url) = &self.link {
+            write!(f, " link={url}")?;
+        }
         Ok(())
     }
 }
@@ -61,7 +66,12 @@ impl Sgr {
             let p = nums[i];
             let n: u32 = p.split(':').next().unwrap_or("0").parse().unwrap_or(0);
             match n {
-                0 => *self = Sgr::default(),
+                0 => {
+                    *self = Sgr {
+                        link: self.link.take(),
+                        ..Sgr::default()
+                    }
+                }
                 1 => self.bold = true,
                 3 => self.italic = true,
                 4 => self.underline = !p.ends_with(":0"),
@@ -127,15 +137,23 @@ fn parse_capture(s: &str) -> Vec<Vec<(char, Sgr)>> {
         let mut row = Vec::new();
         let mut chars = line.chars().peekable();
         while let Some(c) = chars.next() {
-            // OSC sequences (Neovim's OSC 8 hyperlinks) carry no cells; they are compared
-            // separately.
+            // OSC sequences: an OSC 8 hyperlink applies to the cells that follow.
             if c == '\x1b' && chars.peek() == Some(&']') {
-                let mut prev = ' ';
+                chars.next();
+                let mut body = String::new();
                 for p in chars.by_ref() {
-                    if p == '\x07' || (prev == '\x1b' && p == '\\') {
+                    if p == '\x07' {
                         break;
                     }
-                    prev = p;
+                    if p == '\\' && body.ends_with('\x1b') {
+                        body.pop();
+                        break;
+                    }
+                    body.push(p);
+                }
+                if let Some(rest) = body.strip_prefix("8;") {
+                    let url = rest.split_once(';').map_or("", |(_, u)| u);
+                    sgr.link = (!url.is_empty()).then(|| url.to_string());
                 }
                 continue;
             }

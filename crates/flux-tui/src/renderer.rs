@@ -38,6 +38,7 @@ impl Renderer {
         }
 
         let mut style: Option<Style> = None;
+        let mut link: Option<std::sync::Arc<str>> = None;
         let mut at: Option<(usize, usize)> = None;
         for y in 0..grid.height() {
             for x in 0..grid.width() {
@@ -55,6 +56,16 @@ impl Renderer {
                 if at != Some((x, y)) {
                     queue!(out, MoveTo(x as u16, y as u16))?;
                 }
+                // OSC 8 hyperlinks, as Neovim sends them for a `url` highlight.
+                if link != cell.link {
+                    if link.is_some() {
+                        queue!(out, Print("\x1b]8;;\x1b\\"))?;
+                    }
+                    if let Some(url) = &cell.link {
+                        queue!(out, Print(format!("\x1b]8;;{url}\x1b\\")))?;
+                    }
+                    link = cell.link.clone();
+                }
                 let cell_style = with_default(cell.style, grid.default);
                 if style != Some(cell_style) {
                     apply_style(out, cell_style)?;
@@ -65,6 +76,9 @@ impl Renderer {
             }
         }
 
+        if link.is_some() {
+            queue!(out, Print("\x1b]8;;\x1b\\"))?;
+        }
         queue!(out, SetAttribute(Attribute::Reset))?;
         if let Some((x, y)) = cursor {
             queue!(out, MoveTo(x as u16, y as u16), Show)?;

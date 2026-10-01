@@ -171,8 +171,13 @@ impl Pane<'_> {
                 rows: shown,
             };
             for span in syntax.iter().filter(|s| s.line == line) {
-                let style = self.theme.capture(span.capture);
-                at.paint(grid, (span.start, span.end), style, false);
+                if !span.capture.is_empty() {
+                    let style = self.theme.capture(span.capture);
+                    at.paint(grid, (span.start, span.end), style, false);
+                }
+                if span.url.is_some() {
+                    at.link(grid, (span.start, span.end), &span.url);
+                }
             }
             if self.buffer().directory && text.line_str(line).ends_with('/') {
                 let len = text.line_len(line);
@@ -534,6 +539,19 @@ struct Paint<'a> {
 }
 
 impl Paint<'_> {
+    /// Make chars `[from, to)` of the line a link.
+    fn link(&self, grid: &mut Grid, (from, to): (usize, usize), url: &Option<std::sync::Arc<str>>) {
+        for (r, glyphs) in self.layout.rows.iter().take(self.rows).enumerate() {
+            let mut x = 0;
+            for glyph in glyphs {
+                if glyph.char_idx >= from && glyph.char_idx < to {
+                    grid.set_link(self.left + x, self.row + r, url.clone());
+                }
+                x += usize::from(glyph.width);
+            }
+        }
+    }
+
     /// Combine `style` into chars `[from, to)` of the line. With `eol`, a line break in the
     /// range shows as one painted cell after the text (a selection, a search match); without
     /// it, characters drawn specially (`^X`) keep their own look (syntax).
@@ -554,6 +572,7 @@ impl Paint<'_> {
                             cell.width,
                             combined,
                         );
+                        grid.set_link(self.left + x, self.row + r, cell.link.clone());
                     }
                 }
                 x += usize::from(glyph.width);

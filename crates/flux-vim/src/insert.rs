@@ -314,7 +314,7 @@ impl Engine {
         while j > 0 && (b[j - 1] == b' ' || b[j - 1] == b'\t') {
             j -= 1;
         }
-        if j < middle.len() || end.chars().last() != Some(c) {
+        if j < middle.len() || !end.ends_with(c) {
             return;
         }
         let j = j - middle.len();

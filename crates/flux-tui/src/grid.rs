@@ -64,6 +64,8 @@ pub struct Cell {
     /// 1, or 2 for a wide character. 0 marks the right half of the wide character to its left.
     pub width: u8,
     pub style: Style,
+    /// The URL the cell links to (an OSC 8 hyperlink).
+    pub link: Option<std::sync::Arc<str>>,
 }
 
 impl Default for Cell {
@@ -72,6 +74,7 @@ impl Default for Cell {
             symbol: " ".into(),
             width: 1,
             style: Style::default(),
+            link: None,
         }
     }
 }
@@ -119,6 +122,7 @@ impl Grid {
                 symbol: " ".into(),
                 width: 1,
                 style,
+                link: None,
             };
             return;
         }
@@ -126,6 +130,7 @@ impl Grid {
             symbol: symbol.to_owned(),
             width,
             style,
+            link: None,
         };
         if width == 2 {
             self.clear_wide_neighbors(x + 1, y);
@@ -133,7 +138,15 @@ impl Grid {
                 symbol: String::new(),
                 width: 0,
                 style,
+                link: None,
             };
+        }
+    }
+
+    /// Make the cell at `(x, y)` a link to `url`.
+    pub fn set_link(&mut self, x: usize, y: usize, url: Option<std::sync::Arc<str>>) {
+        if x < self.width && y < self.height {
+            self.cells[y * self.width + x].link = url;
         }
     }
 

@@ -27,6 +27,8 @@ pub(crate) struct Setting {
     pub capture: Option<u32>,
     pub key: String,
     pub value: Option<String>,
+    /// A capture given as the value (`#set! @label url @dest`): its text is the value.
+    pub value_capture: Option<u32>,
 }
 
 /// What a pattern adds to the plain tree match.
@@ -155,10 +157,15 @@ fn parse_pattern(query: &Query, index: usize) -> Result<Pattern, String> {
                     [key, value, ..] => (key.clone(), Some(value.clone())),
                     [] => return Err("#set! needs a key".into()),
                 };
+                let value_capture = match p.args.last() {
+                    Some(QueryPredicateArg::Capture(c)) if p.args.len() >= 3 => Some(*c),
+                    _ => None,
+                };
                 pattern.settings.push(Setting {
                     capture,
                     key,
                     value,
+                    value_capture,
                 });
                 None
             }
