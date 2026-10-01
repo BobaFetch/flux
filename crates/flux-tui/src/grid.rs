@@ -19,6 +19,8 @@ pub enum Color {
 pub struct Style {
     pub fg: Color,
     pub bg: Color,
+    /// Underline color.
+    pub sp: Color,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -32,6 +34,7 @@ impl Style {
         Self {
             fg: color,
             bg: Color::Reset,
+            sp: Color::Reset,
             bold: false,
             italic: false,
             underline: false,
@@ -48,6 +51,7 @@ impl Style {
         Style {
             fg: pick(self.fg, top.fg),
             bg: pick(self.bg, top.bg),
+            sp: pick(self.sp, top.sp),
             bold: self.bold || top.bold,
             italic: self.italic || top.italic,
             underline: self.underline || top.underline,

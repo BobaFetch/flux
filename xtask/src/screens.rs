@@ -24,7 +24,10 @@ struct Sgr {
     bg: Option<String>,
     bold: bool,
     italic: bool,
-    underline: bool,
+    /// Underline style: 1 straight, 3 curly (`4:3`), …; 0 none.
+    underline: u8,
+    /// Underline color (`58`).
+    sp: Option<String>,
     strikethrough: bool,
     reverse: bool,
     /// An OSC 8 hyperlink's URL.
@@ -42,13 +45,20 @@ impl fmt::Display for Sgr {
         for (on, name) in [
             (self.bold, "bold"),
             (self.italic, "italic"),
-            (self.underline, "underline"),
             (self.strikethrough, "strike"),
             (self.reverse, "reverse"),
         ] {
             if on {
                 write!(f, " {name}")?;
             }
+        }
+        match self.underline {
+            0 => {}
+            1 => write!(f, " underline")?,
+            n => write!(f, " underline:{n}")?,
+        }
+        if let Some(sp) = &self.sp {
+            write!(f, " sp={sp}")?;
         }
         if let Some(url) = &self.link {
             write!(f, " link={url}")?;
@@ -74,12 +84,13 @@ impl Sgr {
                 }
                 1 => self.bold = true,
                 3 => self.italic = true,
-                4 => self.underline = !p.ends_with(":0"),
+                4 => self.underline = p.split_once(':').map_or(1, |(_, s)| s.parse().unwrap_or(1)),
                 7 => self.reverse = true,
                 9 => self.strikethrough = true,
                 22 => self.bold = false,
                 23 => self.italic = false,
-                24 => self.underline = false,
+                24 => self.underline = 0,
+                59 => self.sp = None,
                 27 => self.reverse = false,
                 29 => self.strikethrough = false,
                 30..=37 => self.fg = Some(format!("ansi{}", n - 30)),
@@ -88,7 +99,7 @@ impl Sgr {
                 100..=107 => self.bg = Some(format!("ansi{}", n - 100 + 8)),
                 39 => self.fg = None,
                 49 => self.bg = None,
-                38 | 48 => {
+                38 | 48 | 58 => {
                     let color = match nums.get(i + 1) {
                         Some(&"2") if i + 4 < nums.len() => {
                             let c = format!(
@@ -107,10 +118,10 @@ impl Sgr {
                         }
                         _ => String::new(),
                     };
-                    if n == 38 {
-                        self.fg = Some(color);
-                    } else {
-                        self.bg = Some(color);
+                    match n {
+                        38 => self.fg = Some(color),
+                        48 => self.bg = Some(color),
+                        _ => self.sp = Some(color),
                     }
                 }
                 _ => {}
@@ -384,13 +395,57 @@ fn diff(nvim: &Screen, ours: &Screen) -> Vec<String> {
     diffs
 }
 
+/// Both editors' language server config for a sample with a fake server script
+/// (`NAME.lsp.json`, see `flux-lsp-fake`): Neovim's as a Lua file to source, flux's as a JSON
+/// file for `$FLUX_LSP_CONFIG`.
+fn lsp_configs(name: &str, script: &Path) -> Result<(PathBuf, PathBuf)> {
+    let dir = root().join("target/xtask-lsp");
+    std::fs::create_dir_all(&dir)?;
+    let fake = root().join("target/debug/flux-lsp-fake");
+    let filetype = match sample_lang(name) {
+        Some("bash") => "sh",
+        Some(l) => l,
+        None => "text",
+    };
+    let lua = dir.join(format!("{name}.lua"));
+    std::fs::write(
+        &lua,
+        format!(
+            "vim.lsp.config('fake', {{ cmd = {{ '{}', '{}' }}, filetypes = {{ '{filetype}' }} }})\n\
+             vim.lsp.enable('fake')\n",
+            fake.display(),
+            script.display()
+        ),
+    )?;
+    let json = dir.join(format!("{name}.json"));
+    std::fs::write(
+        &json,
+        serde_json::json!([{
+            "name": "fake",
+            "cmd": [fake.display().to_string(), script.display().to_string()],
+            "filetypes": [filetype],
+        }])
+        .to_string(),
+    )?;
+    Ok((lua, json))
+}
+
 /// Every file in `xtask/screens/` is opened in both editors, with 24-bit and with 16 colors.
 /// A file `NAME.keys` next to it is typed after opening: each line literally, except lines
-/// starting `keys: `, which are tmux key names (`keys: Escape C-w v`).
+/// starting `keys: `, which are tmux key names (`keys: Escape C-w v`). With `NAME.lsp.json`,
+/// both editors run `flux-lsp-fake` with that script as the file's language server.
+/// `filter` keeps only the samples whose name contains it.
 #[allow(clippy::print_stdout)]
-pub fn screens() -> Result<()> {
+pub fn screens(filter: Option<&str>) -> Result<()> {
     let status = Command::new(env!("CARGO"))
-        .args(["build", "--quiet", "--package", "flux"])
+        .args([
+            "build",
+            "--quiet",
+            "--package",
+            "flux",
+            "--package",
+            "flux-lsp",
+        ])
         .current_dir(root())
         .status()?;
     if !status.success() {
@@ -401,7 +456,8 @@ pub fn screens() -> Result<()> {
     let dir = root().join("xtask/screens");
     let mut samples: Vec<_> = std::fs::read_dir(&dir)?
         .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
-        .filter(|n| !n.ends_with(".keys"))
+        .filter(|n| !n.ends_with(".keys") && !n.ends_with(".lsp.json"))
+        .filter(|n| filter.is_none_or(|f| n.contains(f)))
         .collect();
     samples.sort();
     let mut failed = 0;
@@ -415,6 +471,29 @@ pub fn screens() -> Result<()> {
             ),
             None => String::new(),
         };
+        let script = dir.join(format!("{name}.lsp.json"));
+        let (start, env) = if script.exists() {
+            let (lua, json) = lsp_configs(name, &script)?;
+            (
+                format!(" --cmd 'luafile {}'{start}", lua.display()),
+                format!(
+                    "env FLUX_LSP_CONFIG={} ",
+                    shell_quote(&json.display().to_string())
+                ),
+            )
+        } else {
+            // No servers, as in `nvim --clean` (flux would start the installed ones).
+            let none = root().join("target/xtask-lsp/none.json");
+            std::fs::create_dir_all(none.parent().expect("has a parent"))?;
+            std::fs::write(&none, "[]")?;
+            (
+                start,
+                format!(
+                    "env FLUX_LSP_CONFIG={} ",
+                    shell_quote(&none.display().to_string())
+                ),
+            )
+        };
         for truecolor in [true, false] {
             total += 1;
             let nvim = capture(
@@ -425,7 +504,7 @@ pub fn screens() -> Result<()> {
             )?;
             let ours = capture(
                 &format!(
-                    "{} {}",
+                    "{env}{} {}",
                     shell_quote(&flux.display().to_string()),
                     shell_quote(name)
                 ),

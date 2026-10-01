@@ -125,6 +125,33 @@ pub enum Action {
     RepeatSubstitute {
         all: bool,
     },
+    /// Neovim's default LSP and diagnostic keys.
+    Lsp(LspCmd),
+}
+
+/// The keys Neovim maps by default for language servers and diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspCmd {
+    /// `]d`, `[d`: the next / previous diagnostic.
+    DiagnosticNext,
+    DiagnosticPrev,
+    /// `]D`, `[D`: the last / first diagnostic.
+    DiagnosticLast,
+    DiagnosticFirst,
+    /// `CTRL-W d`: the diagnostics at the cursor in a floating window.
+    DiagnosticFloat,
+    /// `K`
+    Hover,
+    /// `CTRL-]` (through 'tagfunc'): go to the definition.
+    Definition,
+    /// `grr`, `gri`, `grt`, `gO`
+    References,
+    Implementation,
+    TypeDefinition,
+    DocumentSymbol,
+    /// `grn`, `gra`
+    Rename,
+    CodeAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,7 +298,18 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
 
     let key = k.next()?;
     if key == Key::ctrl('w') {
-        return Ok(window_command(k.next()?).map(|cmd| (register, count, Action::Window(cmd))));
+        let next = k.next()?;
+        if next.typed_char() == Some('d') || next == Key::ctrl('d') {
+            return Ok(Some((
+                register,
+                count,
+                Action::Lsp(LspCmd::DiagnosticFloat),
+            )));
+        }
+        return Ok(window_command(next).map(|cmd| (register, count, Action::Window(cmd))));
+    }
+    if key == Key::ctrl(']') {
+        return Ok(Some((register, count, Action::Lsp(LspCmd::Definition))));
     }
     let action = match key.typed_char() {
         Some(c) => match c {
@@ -379,7 +417,27 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
                 Some('Q') => Some(Action::QuitDiscard),
                 _ => None,
             },
+            'K' => Some(Action::Lsp(LspCmd::Hover)),
+            ']' | '[' => {
+                let next = c == ']';
+                match k.next()?.typed_char() {
+                    Some('d') if next => Some(Action::Lsp(LspCmd::DiagnosticNext)),
+                    Some('d') => Some(Action::Lsp(LspCmd::DiagnosticPrev)),
+                    Some('D') if next => Some(Action::Lsp(LspCmd::DiagnosticLast)),
+                    Some('D') => Some(Action::Lsp(LspCmd::DiagnosticFirst)),
+                    _ => None,
+                }
+            }
             'g' => match k.next()?.typed_char() {
+                Some('O') => Some(Action::Lsp(LspCmd::DocumentSymbol)),
+                Some('r') => match k.next()?.typed_char() {
+                    Some('r') => Some(Action::Lsp(LspCmd::References)),
+                    Some('i') => Some(Action::Lsp(LspCmd::Implementation)),
+                    Some('t') => Some(Action::Lsp(LspCmd::TypeDefinition)),
+                    Some('n') => Some(Action::Lsp(LspCmd::Rename)),
+                    Some('a') => Some(Action::Lsp(LspCmd::CodeAction)),
+                    _ => None,
+                },
                 Some('~') => operator(k, Operator::ToggleCase, '~', &mut count)?,
                 Some('u') => operator(k, Operator::Lowercase, 'u', &mut count)?,
                 Some('U') => operator(k, Operator::Uppercase, 'U', &mut count)?,

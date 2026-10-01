@@ -9,8 +9,17 @@ use serde_json::{Value, json};
 
 use crate::engine::Engine;
 
+mod commands;
+
 /// Something a server sent.
 pub fn handle_message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Value) {
+    message(engine, editor, client, msg);
+    // Diagnostics may have brought the sign column, which narrows the text.
+    editor.refresh_window_widths();
+    editor.with_window(|w, m| w.scroll_to_cursor(m));
+}
+
+fn message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Value) {
     let method = msg["method"].as_str().map(str::to_owned);
     let id = msg.get("id").cloned();
     match (method, id) {

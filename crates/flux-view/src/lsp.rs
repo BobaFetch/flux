@@ -139,6 +139,30 @@ pub struct Diagnostic {
     pub message: String,
     pub source: Option<String>,
     pub code: Option<String>,
+    /// Where it was in the buffer's text when it came, as (line, byte column) points, and the
+    /// text's revision then: like Neovim's extmarks, diagnostics move with edits until the
+    /// server sends new ones.
+    pub placed: Option<(Revision, (usize, usize), (usize, usize))>,
+}
+
+/// Move point `p` (line, byte column) through `edit`, like an extmark: a point in deleted text
+/// goes to where the deletion was; text inserted at the point pushes it along with
+/// `right_gravity`.
+fn follow_edit(p: (usize, usize), e: &flux_core::ByteEdit, right_gravity: bool) -> (usize, usize) {
+    let start = (e.start.row, e.start.col);
+    let old_end = (e.old_end.row, e.old_end.col);
+    let new_end = (e.new_end.row, e.new_end.col);
+    if p < start || (p == start && start == old_end && !right_gravity) {
+        return p;
+    }
+    if p < old_end {
+        return start;
+    }
+    if p.0 == old_end.0 {
+        (new_end.0, new_end.1 + p.1 - old_end.1)
+    } else {
+        (p.0 + new_end.0 - old_end.0, p.1)
+    }
 }
 
 /// Language servers and what they've told the editor.
@@ -335,6 +359,16 @@ impl LspState {
             .filter(|c| c.docs.contains_key(&buffer) && c.state != ClientState::Exited)
             .map(|c| c.id)
             .collect()
+    }
+
+    /// Whether `buffer` has signs to show (diagnostics, for now). `cwd` is where its name is
+    /// relative to.
+    pub fn has_signs(&self, buffer: &crate::Buffer, cwd: &Path) -> bool {
+        !self.diagnostics.is_empty()
+            && buffer.path.as_ref().is_some_and(|p| {
+                let uri = path_to_uri(&crate::explorer::absolute(cwd, p));
+                !self.diagnostics_for(&uri).is_empty()
+            })
     }
 
     /// The diagnostics shown for document `uri`.
@@ -639,6 +673,22 @@ impl Editor {
         let Some(uri) = params["uri"].as_str() else {
             return;
         };
+        // Placed in the buffer's text as it is now, if the file is open.
+        let enc = self
+            .lsp
+            .client(client)
+            .map_or(Encoding::Utf16, |c| c.encoding);
+        let buffer = uri_to_path(uri)
+            .and_then(|p| self.find_buffer(&p))
+            .and_then(|id| self.buffer(id))
+            .filter(|b| b.loaded);
+        let place = |line: usize, character: usize| -> Option<(Revision, (usize, usize))> {
+            let text = &buffer?.text;
+            let c = from_lsp(text, line, character, enc);
+            let s = text.line_str(c.line);
+            let byte = s.char_indices().nth(c.col).map_or(s.len(), |(i, _)| i);
+            Some((text.revision(), (c.line, byte)))
+        };
         let fresh: Vec<Diagnostic> = params["diagnostics"]
             .as_array()
             .into_iter()
@@ -650,10 +700,15 @@ impl Editor {
                         p["character"].as_u64().unwrap_or(0) as usize,
                     )
                 };
+                let (start, end) = (pos(&d["range"]["start"]), pos(&d["range"]["end"]));
+                let placed = place(start.0, start.1)
+                    .zip(place(end.0, end.1))
+                    .map(|((rev, s), (_, e))| (rev, s, e));
                 Diagnostic {
                     client,
-                    start: pos(&d["range"]["start"]),
-                    end: pos(&d["range"]["end"]),
+                    start,
+                    end,
+                    placed,
                     severity: d["severity"].as_u64().unwrap_or(1).clamp(1, 4) as u8,
                     message: d["message"].as_str().unwrap_or("").to_string(),
                     source: d["source"].as_str().map(str::to_owned),
@@ -667,9 +722,7 @@ impl Editor {
             .collect();
         // Not shown while typing ('update_in_insert' is off): held until Insert mode ends.
         let target = if self.mode == crate::Mode::Insert {
-            
-            self
-                .lsp
+            self.lsp
                 .held_diagnostics
                 .entry(uri.to_string())
                 .or_insert_with(|| self.lsp.diagnostics.get(uri).cloned().unwrap_or_default())
@@ -703,10 +756,27 @@ impl Editor {
             return Vec::new();
         };
         let text = &buffer.text;
+        let cursor = |(line, byte): (usize, usize)| {
+            let line = line.min(text.last_line());
+            let s = text.line_str(line);
+            let col = s.char_indices().take_while(|&(i, _)| i < byte).count();
+            Cursor { line, col }
+        };
         self.lsp
             .diagnostics_for(&uri)
             .iter()
             .map(|d| {
+                // Follow the edits made since the diagnostic came.
+                if let Some((rev, s, e)) = d.placed
+                    && let Some(edits) = text.edits_since(rev)
+                {
+                    let (mut s, mut e) = (s, e);
+                    for edit in edits {
+                        s = follow_edit(s, &edit.bytes, true);
+                        e = follow_edit(e, &edit.bytes, false);
+                    }
+                    return (cursor(s), cursor(e.max(s)), d);
+                }
                 let enc = self
                     .lsp
                     .client(d.client)

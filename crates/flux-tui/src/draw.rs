@@ -104,20 +104,39 @@ impl Pane<'_> {
         let win = self.win;
         let text = self.text();
         let text_rows = self.text_rows(grid);
-        // The number column comes first; the text starts after it.
+        // The sign column and the number column come first; the text starts after them.
+        let diagnostics = self.editor.buffer_diagnostics(win.buffer);
+        let signw = flux_view::editor::sign_width(&win.opts.signcolumn, !diagnostics.is_empty());
         let numw = win
             .opts
             .number_width(text.line_count(), self.rect.height.max(1));
-        let (top_row, left) = (self.rect.row, self.rect.col + numw);
-        let width = self.rect.width.saturating_sub(numw).max(1);
+        let (top_row, left) = (self.rect.row, self.rect.col + signw + numw);
+        let width = self.rect.width.saturating_sub(signw + numw).max(1);
         let insert = self.is_current() && self.editor.mode == Mode::Insert;
         let mut cursor = None;
-        // The number column is LineNr even where a wrapped line has no number.
+        // The sign column is SignColumn and the number column LineNr, also where a wrapped line
+        // has no sign or number.
         for r in 0..text_rows.min(self.rect.height) {
-            for x in 0..numw {
+            for x in 0..signw {
+                grid.set(
+                    self.rect.col + x,
+                    top_row + r,
+                    " ",
+                    1,
+                    self.theme.sign_column,
+                );
+            }
+            for x in signw..signw + numw {
                 grid.set(self.rect.col + x, top_row + r, " ", 1, self.theme.line_nr);
             }
         }
+        // A diagnostic's sign goes on its first line; the most severe one wins.
+        let mut signs: std::collections::HashMap<usize, u8> = std::collections::HashMap::new();
+        for (start, _, d) in &diagnostics {
+            let s = signs.entry(start.line).or_insert(d.severity);
+            *s = (*s).min(d.severity);
+        }
+        let numx = self.rect.col + signw;
         let mut row = 0;
         let mut line = win.top;
         let shown_lines = win.top..(win.top + text_rows).min(text.line_count());
@@ -141,7 +160,7 @@ impl Pane<'_> {
             if !fits && line != win.top {
                 // Vim's `display=lastline`: show what fits and mark the cut with `@@@`.
                 if numw > 0 {
-                    self.draw_number(grid, line, top_row + row, numw);
+                    self.draw_number(grid, line, numx, top_row + row, numw);
                 }
                 draw_rows(
                     grid,
@@ -160,7 +179,20 @@ impl Pane<'_> {
             }
             let shown = layout.row_count().min(text_rows - row);
             if numw > 0 {
-                self.draw_number(grid, line, top_row + row, numw);
+                self.draw_number(grid, line, numx, top_row + row, numw);
+            }
+            if signw > 0
+                && let Some(&severity) = signs.get(&line)
+            {
+                let sign = ["E ", "W ", "I ", "H "][usize::from(severity - 1)];
+                let style = self.theme.diagnostic_sign[usize::from(severity - 1)];
+                grid.put_str_until(
+                    self.rect.col,
+                    top_row + row,
+                    sign,
+                    style,
+                    self.rect.col + signw,
+                );
             }
             draw_rows(grid, self.theme, &layout, left, top_row + row, shown);
             let at = Paint {
@@ -178,6 +210,22 @@ impl Pane<'_> {
                 if span.url.is_some() {
                     at.link(grid, (span.start, span.end), &span.url);
                 }
+            }
+            // Diagnostics are underlined, the most severe last.
+            let mut on_line: Vec<_> = diagnostics
+                .iter()
+                .filter(|(s, e, _)| s.line <= line && line <= e.line)
+                .collect();
+            on_line.sort_by_key(|(_, _, d)| std::cmp::Reverse(d.severity));
+            for (s, e, d) in on_line {
+                let from = if s.line == line { s.col } else { 0 };
+                let to = if e.line == line {
+                    e.col
+                } else {
+                    text.line_len(line)
+                };
+                let style = self.theme.diagnostic_underline[usize::from(d.severity - 1)];
+                at.paint(grid, (from, to.max(from)), style, false);
             }
             if self.buffer().directory && text.line_str(line).ends_with('/') {
                 let len = text.line_len(line);
@@ -242,7 +290,7 @@ impl Pane<'_> {
 
     /// The number column for `line`: its number ('number'), its distance from the cursor line
     /// ('relativenumber'), or both (the cursor line's own number, left-aligned).
-    fn draw_number(&self, grid: &mut Grid, line: usize, y: usize, numw: usize) {
+    fn draw_number(&self, grid: &mut Grid, line: usize, x: usize, y: usize, numw: usize) {
         let opts = &self.win.opts;
         let cur = self.win.cursor.line;
         let digits = numw - 1;
@@ -257,7 +305,7 @@ impl Pane<'_> {
         };
         // CursorLineNr is only for 'cursorline', which flux doesn't have.
         let style = self.theme.line_nr;
-        grid.put_str_until(self.rect.col, y, &s, style, self.rect.col + numw);
+        grid.put_str_until(x, y, &s, style, x + numw);
     }
 
     /// Matches to highlight in `lines`: every match of the last search pattern with
@@ -420,18 +468,60 @@ impl Pane<'_> {
             ""
         };
         let name = format!("{} {flags} ", buffer.name());
-        let (name_width, ruler_width) = (
-            UnicodeWidthStr::width(name.as_str()),
-            UnicodeWidthStr::width(ruler.as_str()),
-        );
-        if name_width + ruler_width <= width {
+        // Neovim's default statusline shows the buffer's diagnostics before the ruler
+        // (`vim.diagnostic.status()`): `E:1 W:2 `, each in its sign's color.
+        let mut right: Vec<(String, Style)> = Vec::new();
+        let mut counts = [0usize; 4];
+        for (_, _, d) in self.editor.buffer_diagnostics(self.win.buffer) {
+            counts[usize::from(d.severity - 1)] += 1;
+        }
+        let mut first = true;
+        for (i, n) in counts.iter().enumerate().filter(|(_, n)| **n > 0) {
+            let seg_style = style.combine(self.theme.diagnostic_sign[i]);
+            if !first && let Some(last) = right.last_mut() {
+                last.0.push(' ');
+            }
+            first = false;
+            right.push((format!("{}:{n}", ["E", "W", "I", "H"][i]), seg_style));
+        }
+        if !right.is_empty() {
+            right.push((" ".into(), style));
+        }
+        right.push((ruler, style));
+        let name_width = UnicodeWidthStr::width(name.as_str());
+        let right_width: usize = right
+            .iter()
+            .map(|(t, _)| UnicodeWidthStr::width(t.as_str()))
+            .sum();
+        if name_width + right_width <= width {
             // `%=` pushes the ruler to the right edge.
             grid.put_str_until(left, y, &name, style, left + width);
-            grid.put_str_until(left + width - ruler_width, y, &ruler, style, left + width);
+            let mut x = left + width - right_width;
+            for (t, st) in &right {
+                x = grid.put_str_until(x, y, t, *st, left + width);
+            }
         } else {
             // Too wide: `%<` at the start cuts the front off everything, marked with `<`.
-            let text = truncate_left(&format!("{name}{ruler}"), width);
-            grid.put_str_until(left, y, &text, style, left + width);
+            let mut cells: Vec<(&str, Style)> = name.graphemes(true).map(|g| (g, style)).collect();
+            for (t, st) in &right {
+                cells.extend(t.graphemes(true).map(|g| (g, *st)));
+            }
+            let mut kept = Vec::new();
+            let mut used = 1;
+            for &(g, st) in cells.iter().rev() {
+                let w = UnicodeWidthStr::width(g);
+                if used + w > width {
+                    break;
+                }
+                kept.push((g, st));
+                used += w;
+            }
+            if width > 0 {
+                let mut x = grid.put_str_until(left, y, "<", style, left + width);
+                for (g, st) in kept.into_iter().rev() {
+                    x = grid.put_str_until(x, y, g, st, left + width);
+                }
+            }
         }
     }
 
@@ -536,6 +626,17 @@ struct Paint<'a> {
     width: usize,
     row: usize,
     rows: usize,
+}
+
+impl Theme {
+    /// The style of a message: ErrorMsg, WarningMsg, or none.
+    fn message(&self, message: &flux_view::Message) -> Style {
+        match message.kind {
+            MessageKind::Error => self.error_msg,
+            MessageKind::Warning => self.warning_msg,
+            _ => Style::default(),
+        }
+    }
 }
 
 impl Paint<'_> {
@@ -663,28 +764,6 @@ fn truncate_middle(s: &str, room: usize) -> String {
     format!("{head}...{}", tail.concat())
 }
 
-/// Keep the end of `s`, as Vim's `%<` does, marking the cut with `<`.
-fn truncate_left(s: &str, room: usize) -> String {
-    if UnicodeWidthStr::width(s) <= room {
-        return s.to_owned();
-    }
-    if room == 0 {
-        return String::new();
-    }
-    let mut tail: Vec<&str> = Vec::new();
-    let mut used = 1;
-    for g in s.graphemes(true).rev() {
-        let w = UnicodeWidthStr::width(g);
-        if used + w > room {
-            break;
-        }
-        tail.push(g);
-        used += w;
-    }
-    tail.reverse();
-    format!("<{}", tail.concat())
-}
-
 /// Just the command line, over a screen left as it was (see `Editor::stale_screen`).
 pub fn draw_cmdline_only(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
     let y = grid.height().checked_sub(1)?;
@@ -724,11 +803,7 @@ fn draw_cmdline(
         // key.
         Mode::Visual if editor.message.is_some() => {
             let message = editor.message.as_ref()?;
-            let style = if message.is_error() {
-                theme.error_msg
-            } else {
-                Style::default()
-            };
+            let style = theme.message(message);
             grid.put_str(0, y, &message.text, style);
             None
         }
@@ -763,19 +838,16 @@ fn draw_cmdline(
         }
         Mode::Normal => {
             if let Some(message) = &editor.message {
-                let style = if message.is_error() {
-                    theme.error_msg
-                } else {
-                    Style::default()
-                };
+                let style = theme.message(message);
                 // Room up to the showcmd column, like Vim's `msg_may_trunc`/`msg_strtrunc`.
                 let room = grid.width().saturating_sub(12).max(1);
                 let text = match message.kind {
                     MessageKind::Info => truncate_middle(&message.text, room),
                     MessageKind::File => truncate_start(&message.text, room),
-                    MessageKind::Full | MessageKind::Error | MessageKind::Question => {
-                        message.text.clone()
-                    }
+                    MessageKind::Full
+                    | MessageKind::Error
+                    | MessageKind::Warning
+                    | MessageKind::Question => message.text.clone(),
                 };
                 grid.put_str(0, y, &text, style);
             }
@@ -804,11 +876,7 @@ fn hit_enter(editor: &Editor, theme: &Theme, grid: &mut Grid) -> Option<(usize, 
     let wrapped = editor.message_lines();
     let lines: Vec<&str> = wrapped.iter().map(String::as_str).collect();
     let height = grid.height();
-    let style = if message.is_error() {
-        theme.error_msg
-    } else {
-        Style::default()
-    };
+    let style = theme.message(message);
     if let Some(top) = editor.more_top {
         // A page of a long message, then `-- More --` (or the prompt on the last page).
         let page = height.saturating_sub(1);
@@ -977,11 +1045,5 @@ mod tests {
         let (rows, cursor) = render(&editor);
         assert_eq!(rows[0], format!("<<<{}", "x".repeat(17)));
         assert_eq!(cursor, Some((19, 3)));
-    }
-
-    #[test]
-    fn long_names_keep_their_end() {
-        assert_eq!(truncate_left("src/very/long/path.rs", 10), "<g/path.rs");
-        assert_eq!(truncate_left("short", 10), "short");
     }
 }

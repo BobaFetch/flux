@@ -81,6 +81,8 @@ pub struct WindowOptions {
     pub number: bool,
     pub relativenumber: bool,
     pub numberwidth: usize,
+    /// 'signcolumn': `auto` (when there are signs), `yes`, or `no`.
+    pub signcolumn: String,
 }
 
 impl Default for WindowOptions {
@@ -89,6 +91,7 @@ impl Default for WindowOptions {
             number: false,
             relativenumber: false,
             numberwidth: 4,
+            signcolumn: "auto".into(),
         }
     }
 }
@@ -194,6 +197,7 @@ pub const OPTIONS: &[OptionDef] = &[
     def("numberwidth", "nuw", Kind::Number, Scope::Window),
     def("relativenumber", "rnu", Kind::Bool, Scope::Window),
     def("report", "", Kind::Number, Scope::Global),
+    def("signcolumn", "scl", Kind::String, Scope::Window),
     def("shiftwidth", "sw", Kind::Number, Scope::Buffer),
     def("smartcase", "scs", Kind::Bool, Scope::Global),
     def("smarttab", "sta", Kind::Bool, Scope::Global),
@@ -318,6 +322,7 @@ impl WindowOptions {
             "number" => Value::Bool(self.number),
             "relativenumber" => Value::Bool(self.relativenumber),
             "numberwidth" => Value::Number(self.numberwidth as i64),
+            "signcolumn" => Value::String(self.signcolumn.clone()),
             _ => return None,
         })
     }
@@ -327,6 +332,7 @@ impl WindowOptions {
             ("number", Value::Bool(x)) => self.number = x,
             ("relativenumber", Value::Bool(x)) => self.relativenumber = x,
             ("numberwidth", Value::Number(x)) => self.numberwidth = x.clamp(1, 20) as usize,
+            ("signcolumn", Value::String(x)) => self.signcolumn = x,
             _ => {}
         }
     }

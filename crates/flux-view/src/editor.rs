@@ -8,6 +8,15 @@ use crate::{
     Buffer, BufferId, Cursor, Dir, Jump, Layout, Metrics, Rect, Registers, Window, WindowId,
 };
 
+/// Width of the sign column ('signcolumn') in a window showing a buffer that has signs or not.
+pub fn sign_width(signcolumn: &str, has_signs: bool) -> usize {
+    match signcolumn {
+        "yes" => 2,
+        "auto" if has_signs => 2,
+        _ => 0,
+    }
+}
+
 /// The command line: the one row below the windows.
 /// Rows below the windows for the command line and messages.
 pub const CMDLINE_ROWS: usize = 1;
@@ -55,6 +64,8 @@ pub enum MessageKind {
     Error,
     /// A question waiting for an answer (`(y/n)?`), with the cursor after it.
     Question,
+    /// Shown in full in the warning color (WarningMsg).
+    Warning,
 }
 
 impl Message {
@@ -713,8 +724,9 @@ impl Editor {
             let text = &buffer.text;
             let tabstop = buffer.opts.tabstop;
             let height = rect.height.max(1);
-            // The number column takes its share of the width.
-            let numw = win.opts.number_width(text.line_count(), height);
+            // The sign and number columns take their share of the width.
+            let numw = win.opts.number_width(text.line_count(), height)
+                + sign_width(&win.opts.signcolumn, self.lsp.has_signs(buffer, &self.cwd));
             let width = rect.width.saturating_sub(numw).max(1);
             let old_width = win.width.max(1);
             win.set_height(&Metrics {
@@ -742,7 +754,8 @@ impl Editor {
             };
             let numw = win
                 .opts
-                .number_width(buffer.text.line_count(), rect.height.max(1));
+                .number_width(buffer.text.line_count(), rect.height.max(1))
+                + sign_width(&win.opts.signcolumn, self.lsp.has_signs(buffer, &self.cwd));
             win.width != rect.width.saturating_sub(numw).max(1)
         });
         if stale {
@@ -897,8 +910,11 @@ impl Editor {
     }
 
     fn show(&mut self, text: String, kind: MessageKind) {
-        let wraps = matches!(kind, MessageKind::Full | MessageKind::Error)
-            && unicode_width::UnicodeWidthStr::width(text.as_str()) >= self.screen_width.max(1);
+        let wraps = matches!(
+            kind,
+            MessageKind::Full | MessageKind::Error | MessageKind::Warning
+        ) && unicode_width::UnicodeWidthStr::width(text.as_str())
+            >= self.screen_width.max(1);
         // Anything longer than one line waits for a key.
         self.hit_enter = text.contains('\n') || wraps;
         self.message = Some(Message { text, kind });
@@ -940,6 +956,11 @@ impl Editor {
     pub fn error(&mut self, text: impl Into<String>) {
         self.error_count += 1;
         self.show(text.into(), MessageKind::Error);
+    }
+
+    /// A warning: like an error, in the warning color, without counting as an error.
+    pub fn warning(&mut self, text: impl Into<String>) {
+        self.show(text.into(), MessageKind::Warning);
     }
 
     /// Register contents, including the read-only `"%` (the file name).

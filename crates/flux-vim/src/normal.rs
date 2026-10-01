@@ -221,6 +221,7 @@ impl Engine {
                 editor.with_window(|w, m| w.scroll_cursor_to(at, m));
             }
             Action::Reselect => self.reselect(editor),
+            Action::Lsp(cmd) => self.lsp_command(editor, cmd, count),
             Action::InsertAtLastInsert => {
                 if let Some(p) = editor.current_buffer().marks.get('^') {
                     let line = p.line.min(editor.text().last_line());

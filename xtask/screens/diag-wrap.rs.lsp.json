@@ -1,0 +1,17 @@
+{
+  "capabilities": { "textDocumentSync": { "openClose": true, "change": 2 }, "positionEncoding": "utf-8" },
+  "on": {
+    "textDocument/didOpen": { "send": [ { "method": "textDocument/publishDiagnostics", "params": {
+      "uri": "$URI", "version": 0,
+      "diagnostics": [
+        { "range": { "start": { "line": 1, "character": 8 }, "end": { "line": 1, "character": 14 } },
+          "severity": 2, "source": "rustc", "message": "unused variable: `unused`" },
+        { "range": { "start": { "line": 2, "character": 17 }, "end": { "line": 2, "character": 23 } },
+          "severity": 1, "source": "rustc", "code": "E0308", "message": "mismatched types" },
+        { "range": { "start": { "line": 3, "character": 19 }, "end": { "line": 3, "character": 20 } },
+          "severity": 3, "message": "an info" },
+        { "range": { "start": { "line": 4, "character": 4 }, "end": { "line": 4, "character": 11 } },
+          "severity": 4, "message": "a hint" }
+      ] } } ] }
+  }
+}
