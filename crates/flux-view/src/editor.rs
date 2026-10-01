@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use flux_core::Text;
 
+pub use crate::options::Options;
 use crate::{
     Buffer, BufferId, Cursor, Dir, Jump, Layout, Metrics, Rect, Registers, Window, WindowId,
 };
@@ -52,6 +53,8 @@ pub enum MessageKind {
     Full,
     /// Shown in full in the error color.
     Error,
+    /// A question waiting for an answer (`(y/n)?`), with the cursor after it.
+    Question,
 }
 
 impl Message {
@@ -60,26 +63,15 @@ impl Message {
     }
 }
 
-/// Neovim's defaults for the options flux implements so far.
+/// A live preview of a command's effect on the current buffer ('inccommand').
 #[derive(Debug, Clone)]
-pub struct Options {
-    pub tabstop: usize,
-    pub shiftwidth: usize,
-    pub expandtab: bool,
-    pub autoindent: bool,
-    pub smarttab: bool,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            tabstop: 8,
-            shiftwidth: 8,
-            expandtab: false,
-            autoindent: true,
-            smarttab: true,
-        }
-    }
+pub struct Preview {
+    pub text: Text,
+    pub highlights: Vec<(Cursor, Cursor)>,
+    /// The text differs from the buffer's (shown as `[+]`, as Neovim does).
+    pub changed: bool,
+    /// Where incsearch puts the cursor: the first match from the start of the range.
+    pub first_match: Option<Cursor>,
 }
 
 #[derive(Debug)]
@@ -98,13 +90,49 @@ pub struct Editor {
     /// The directory relative file names are taken from (`:cd`).
     pub cwd: PathBuf,
     pub mode: Mode,
-    /// Text typed after `:`.
+    /// Text typed on the command line, after its `cmdline_kind` character.
     pub cmdline: String,
+    /// `:` for an Ex command, `/` or `?` for a search.
+    pub cmdline_kind: char,
+    /// The cursor on the command line, as a char index into `cmdline`.
+    pub cmdline_pos: usize,
+    /// The mode the command line returns to (Visual for a search typed in Visual mode).
+    pub cmdline_return: Mode,
+    /// 'incsearch' while typing a search: the match to show, and the pattern typed so far
+    /// (highlighted instead of the last search pattern).
+    pub incsearch: Option<(Cursor, Cursor)>,
+    pub incsearch_pattern: Option<String>,
+    /// 'inccommand' while typing `:s`: the buffer text as the command would leave it, and the
+    /// parts to highlight (the replacements, or the matches before a replacement is typed).
+    pub preview: Option<Preview>,
     pub message: Option<Message>,
     pub options: Options,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
+    /// Paging through a long message (`-- More --`): the first row shown.
+    pub more_top: Option<usize>,
+    /// A key the pager doesn't know was typed: show its keys.
+    pub more_help: bool,
+    /// The message was shown by this command to stay (Vim's `keep_msg`): line-count messages
+    /// don't replace it.
+    pub keep_msg: bool,
+    /// A kept message to show again when the command ends (after an Insert mode it started).
+    pub kept_message: Option<Message>,
+    /// For output made by running a command on many lines (`:g/pat/p`): the cursor after each
+    /// message line was produced. Quitting the pager early stops there, as Vim does (it pages
+    /// while the command runs).
+    pub message_positions: Vec<Option<Cursor>>,
+    /// The furthest message row the pager has reached (the command has run up to it).
+    pub more_max_row: usize,
+    /// The window's top line before the command that made the message.
+    pub more_restore_top: Option<usize>,
+    /// Draw the message over a freshly drawn screen, with this view (top line, cursor),
+    /// rather than the screen before the command (`:g` redraws before its output).
+    pub fresh_message_base: Option<(usize, Cursor)>,
+    /// The screen isn't redrawn above the command line (it was typed at a prompt, over a
+    /// message still showing).
+    pub stale_screen: bool,
     /// A Normal-mode command is being typed with `CTRL-O` from Insert mode.
     pub insert_pending: bool,
     pub visual: Visual,
@@ -124,6 +152,16 @@ pub struct Editor {
     /// The next buffer switch is into a window just split off (`:new`, `:split file`), which
     /// doesn't record where the old buffer was left (Vim's `do_ecmd` without `oldwin`).
     pub in_new_window: bool,
+    /// The statusline doesn't show `[+]` for the current buffer yet (Neovim doesn't redraw it
+    /// while `:s///c` asks).
+    pub hide_modified: bool,
+    /// `:g` is running: jumps aren't remembered (Vim's `setpcmark` does nothing then).
+    pub global_busy: bool,
+    /// The next buffer switch may abandon unsaved changes (`:e!`, `:b!` without 'hidden').
+    pub force_abandon: bool,
+    unload_on_switch: Option<BufferId>,
+    /// The last search and substitute patterns, and command-line history.
+    pub search: crate::search::SearchState,
     screen_width: usize,
     screen_height: usize,
     next_buffer: usize,
@@ -148,10 +186,25 @@ impl Editor {
             cwd: std::env::current_dir().unwrap_or_default(),
             mode: Mode::Normal,
             cmdline: String::new(),
+            cmdline_kind: ':',
+            cmdline_pos: 0,
+            cmdline_return: Mode::Normal,
+            incsearch: None,
+            incsearch_pattern: None,
+            preview: None,
             message: None,
             options: Options::default(),
             registers: Registers::default(),
             hit_enter: false,
+            more_top: None,
+            more_help: false,
+            keep_msg: false,
+            kept_message: None,
+            message_positions: Vec::new(),
+            more_max_row: 0,
+            more_restore_top: None,
+            fresh_message_base: None,
+            stale_screen: false,
             insert_pending: false,
             visual: Visual {
                 anchor: Cursor::default(),
@@ -164,6 +217,11 @@ impl Editor {
             arg_had_last: false,
             quitmore: 0,
             in_new_window: false,
+            search: Default::default(),
+            force_abandon: false,
+            global_busy: false,
+            hide_modified: false,
+            unload_on_switch: None,
             screen_width: 0,
             screen_height: 0,
             next_buffer: 2,
@@ -213,6 +271,7 @@ impl Editor {
         let id = BufferId(self.next_buffer);
         self.next_buffer += 1;
         buffer.id = id;
+        buffer.opts = self.options.buffer.clone();
         buffer.created_in(self.window.id);
         self.buffers.push(buffer);
         id
@@ -259,6 +318,7 @@ impl Editor {
                 buffer.path = Some(path.to_path_buf());
                 let current = self.current_buffer_mut();
                 buffer.positions = std::mem::take(&mut current.positions);
+                buffer.opts = current.opts.clone();
                 *current = buffer;
             }
             Err(e) => self.error(format!("\"{}\" {e}", path.display())),
@@ -296,6 +356,17 @@ impl Editor {
         if old == id {
             return;
         }
+        // Without 'hidden' a buffer can't be left with unsaved changes unless another window
+        // shows it (or `!` was used), and one that is left is unloaded.
+        let shown_elsewhere = self.windows.iter().any(|w| w.buffer == old);
+        let force = std::mem::take(&mut self.force_abandon);
+        if !self.options.hidden && !shown_elsewhere {
+            if self.current_buffer().modified() && !force {
+                self.error("E37: No write since last change (add ! to override)");
+                return;
+            }
+            self.unload_on_switch = Some(old);
+        }
         let win = self.window.id;
         let cursor = self.window.cursor;
         let new_window = std::mem::take(&mut self.in_new_window);
@@ -331,6 +402,12 @@ impl Editor {
             w.cursor = Cursor { line, col };
             w.scroll_to_cursor(m);
         });
+        if let Some(old) = self.unload_on_switch.take()
+            && let Some(b) = self.buffer_mut(old)
+            && b.path.is_some()
+        {
+            b.unload();
+        }
     }
 
     /// Listed buffers in number order.
@@ -503,7 +580,12 @@ impl Editor {
     /// buffer at the same place, becomes current. `size` is a count for its height or width.
     pub fn split(&mut self, vertical: bool, size: Option<usize>) -> bool {
         let id = WindowId(self.next_window);
-        if !self.layout.split(self.window.id, id, vertical, size) {
+        let after = if vertical {
+            self.options.splitright
+        } else {
+            self.options.splitbelow
+        };
+        if !self.layout.split(self.window.id, id, vertical, size, after) {
             self.error("E36: Not enough room");
             return false;
         }
@@ -574,7 +656,6 @@ impl Editor {
 
     /// Set window sizes from the layout, keeping each cursor at the same relative height.
     pub fn sync_window_sizes(&mut self) {
-        let tabstop = self.options.tabstop;
         for (id, rect) in self.layout.rects() {
             let win = if self.window.id == id {
                 &mut self.window
@@ -588,7 +669,11 @@ impl Editor {
                 continue;
             };
             let text = &buffer.text;
-            let (width, height) = (rect.width.max(1), rect.height.max(1));
+            let tabstop = buffer.opts.tabstop;
+            let height = rect.height.max(1);
+            // The number column takes its share of the width.
+            let numw = win.opts.number_width(text.line_count(), height);
+            let width = rect.width.saturating_sub(numw).max(1);
             let old_width = win.width.max(1);
             win.set_height(&Metrics {
                 text,
@@ -603,6 +688,35 @@ impl Editor {
                 height,
             });
         }
+    }
+
+    /// Resize windows whose number column changed width (lines added past a power of ten,
+    /// 'number' set, …).
+    pub fn refresh_window_widths(&mut self) {
+        let stale = self.layout.rects().into_iter().any(|(id, rect)| {
+            let win = self.window_ref(id);
+            let Some(buffer) = self.buffer(win.buffer) else {
+                return false;
+            };
+            let numw = win
+                .opts
+                .number_width(buffer.text.line_count(), rect.height.max(1));
+            win.width != rect.width.saturating_sub(numw).max(1)
+        });
+        if stale {
+            self.sync_window_sizes();
+        }
+    }
+
+    /// Buffer-local options of the current buffer.
+    pub fn buf_opts(&self) -> &crate::options::BufferOptions {
+        &self.current_buffer().opts
+    }
+
+    /// Whether a Visual selection is active (also while typing a search from Visual mode).
+    pub fn visual_active(&self) -> bool {
+        self.mode == Mode::Visual
+            || (self.mode == Mode::CmdLine && self.cmdline_return == Mode::Visual)
     }
 
     pub fn screen_size(&self) -> (usize, usize) {
@@ -635,7 +749,7 @@ impl Editor {
     pub fn metrics(&self) -> Metrics<'_> {
         Metrics {
             text: &self.current_buffer().text,
-            tabstop: self.options.tabstop,
+            tabstop: self.current_buffer().opts.tabstop,
             width: self.window.width,
             height: self.window.height,
         }
@@ -685,7 +799,7 @@ impl Editor {
             .expect("buffer of the current window");
         let metrics = Metrics {
             text: &buffer.text,
-            tabstop: self.options.tabstop,
+            tabstop: buffer.opts.tabstop,
             width: self.window.width,
             height: self.window.height,
         };
@@ -722,6 +836,14 @@ impl Editor {
         self.show(text.into(), MessageKind::Info);
     }
 
+    /// Vim's `msgmore` (`3 fewer lines`): not shown over a message the current command
+    /// asked to keep (a search's `/pattern  [1/5]`).
+    pub fn more_info(&mut self, text: impl Into<String>) {
+        if !self.keep_msg {
+            self.info(text);
+        }
+    }
+
     /// A message about a file, like `"main.rs" 42L, 1337B written`.
     pub fn file_message(&mut self, text: impl Into<String>) {
         self.show(text.into(), MessageKind::File);
@@ -738,6 +860,37 @@ impl Editor {
         // Anything longer than one line waits for a key.
         self.hit_enter = text.contains('\n') || wraps;
         self.message = Some(Message { text, kind });
+        self.kept_message = None;
+        self.message_positions.clear();
+        self.more_max_row = 0;
+        self.more_restore_top = None;
+        self.fresh_message_base = None;
+        // More than a screenful is shown a page at a time ('more').
+        self.more_top =
+            (self.hit_enter && self.message_lines().len() >= self.screen_height).then_some(0);
+    }
+
+    /// The message line shown on screen row `row` of the message (rows count wrapped lines).
+    pub fn message_line_at(&self, row: usize) -> usize {
+        let width = self.screen_width.max(1);
+        let mut seen = 0;
+        let text = self.message.as_ref().map_or("", |m| m.text.as_str());
+        for (i, l) in text.lines().enumerate() {
+            seen += wrap(l, width).len();
+            if row < seen {
+                return i;
+            }
+        }
+        text.lines().count().saturating_sub(1)
+    }
+
+    /// The message split into screen rows.
+    pub fn message_lines(&self) -> Vec<String> {
+        let width = self.screen_width.max(1);
+        self.message
+            .as_ref()
+            .map(|m| m.text.lines().flat_map(|l| wrap(l, width)).collect())
+            .unwrap_or_default()
     }
 
     /// An error message. One that doesn't fit on the command line wraps, and waits for a key
@@ -756,6 +909,30 @@ impl Editor {
                 crate::RegisterKind::Char,
             ));
         }
+        if name == Some('/') {
+            let pat = self.search.last_pattern()?;
+            return Some(crate::Register::new(
+                pat.pat.clone(),
+                crate::RegisterKind::Char,
+            ));
+        }
         self.registers.get(name).cloned()
     }
+}
+
+/// Split `line` into pieces at most `width` cells wide.
+pub fn wrap(line: &str, width: usize) -> Vec<String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut out = vec![String::new()];
+    let mut used = 0;
+    for g in line.graphemes(true) {
+        let w = unicode_width::UnicodeWidthStr::width(g);
+        if used + w > width {
+            out.push(String::new());
+            used = 0;
+        }
+        out.last_mut().unwrap().push_str(g);
+        used += w;
+    }
+    out
 }

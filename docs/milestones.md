@@ -136,7 +136,7 @@ Fixed along the way: a crash when deleting every line from far down a long file 
 Known gaps: visual-block mode (`CTRL-V`), `:normal` and `:g` (all later); sentence objects
 (`is`/`as`) and `(`/`)`; clipboard registers `"+`/`"*` (M7); marks on other files (M3).
 
-## M3: Windows and buffers ✅ (awaiting manual check)
+## M3: Windows and buffers ✅
 
 - Windows: `:sp [file]`, `:vs [file]`, `:new`, `:vnew`, with a size (`:5sp`, `5:sp`) and the
   `:vert[ical]` modifier; `:close` (E444), `:only`, `:q` closing a window, `:resize [+-]N`,
@@ -185,7 +185,68 @@ Known gaps: tab pages, `:sb`/`:sball`, `:args`/`:next`/`:prev` (the argument lis
 affects `:q`), `'splitbelow'`/`'splitright'` and other options (`:set` is M4), `CTRL-W f`,
 `CTRL-W ]`, and the mouse.
 
-## M4: Search and Ex
+## M4: Search and Ex ✅ (awaiting manual check)
+
+- Vim patterns, translated to the `regex` crate: all four magic levels (`\v \m \M \V`),
+  `\c`/`\C`, 'ignorecase' and 'smartcase', `\< \>`, `\zs \ze`, `\{n,m}` and `\{-}`, groups
+  and alternation, collections (with `[:alpha:]` classes and `\_[...]`), `\s \d \w \a \l \u
+  \x \k \f …`, line breaks (`\n`, `\_s`, `\_.`) and `~`.
+- `/` and `?` with offsets (`e`, `s`, `b`, `+N`), `//` and `??`, `n` `N` `*` `#` `g*` `g#` with
+  counts, as motions after operators and in Visual mode, 'wrapscan', and Neovim's messages:
+  `/pattern  [3/17]` (with `W` after wrapping), E486, E384/E385, E35. Searches are jumps, fill
+  `"/`, and are in the history.
+- 'hlsearch' (with CurSearch for the match under the cursor), `:noh`, 'incsearch' while
+  typing a search or the pattern of `:s`, and Neovim's default 'inccommand': `:s` is previewed
+  in the buffer as you type it.
+- The command line edits like Vim's: cursor keys, `<S-Left>`/`<S-Right>`, `CTRL-B`/`CTRL-E`,
+  `<Del>`, `CTRL-V`, `CTRL-R`, history on `<Up>`/`<Down>` (matching what's typed) and
+  `CTRL-P`/`CTRL-N`; a long command line wraps.
+- Ex ranges: `.` `$` `%` `*` numbers, marks, `/pat/` `?pat?` `\/` `\?` `\&`, `+N`/`-N`, `,` and
+  `;`, a count before `:` (`3:` → `:.,.+2`), E16/E481, and the "Backwards range given, OK to
+  swap (y/n)?" question.
+- `:s` with flags `& c e g i I n p # l r` and a count, `&` `\0`–`\9` `\u \U \l \L \e \E` `\r`
+  `\n` `\t` `~` in the replacement, patterns that join lines, confirmation (`y n a q l`,
+  `CTRL-E`/`CTRL-Y`), Vim's cursor, `'[`/`']`, messages and undo; `:&`, `:&&`, `:~`, and `&`/`g&`
+  in Normal mode.
+- `:g` and `:v` (any command, default `:p`), `:d`, `:y`, `:>`, `:<`, `:m`, `:t`/`:co`, `:j`,
+  `:pu`, `:norm`, `:p`, `:nu`/`:#`, `:=`, `:k`/`:mark`, `:u`, `:red`, and `:[range]w` for part
+  of the buffer.
+- `:set`, `:setlocal`, `:setglobal` (`opt`, `noopt`, `invopt`, `opt!`, `opt&`, `opt?`, `=` `+=`
+  `-=` `^=`) for the options flux implements: 'autoindent' 'expandtab' 'gdefault' 'hidden'
+  'hlsearch' 'ignorecase' 'incsearch' 'number' 'numberwidth' 'relativenumber' 'report'
+  'shiftwidth' 'smartcase' 'smarttab' 'softtabstop' 'splitbelow' 'splitright' 'tabstop'
+  'wrapscan', each with Vim's scope (buffer and window options are local). Others give E518.
+- Long output is paged with `-- More --` (`<Space> <CR> d b u k g G q`), quitting early stops
+  a `:g` where Vim would.
+
+Verified: all 1070 M0–M4 oracle cases match Neovim 0.12.5 (347 new: searches, ranges, every
+line command, `:s` and `:g` including confirmation and undo, options), 19 new key sequences
+produce screens identical to `nvim --clean` (plus the 144 earlier ones), and highlight
+positions (hlsearch, incsearch, the preview, confirmation) match cell for cell. On a
+200,000-line file, a failing search takes 0.04 s, `:%s/alpha/A/g` 0.4 s, `:g/beta/d` 1.3 s
+and `:g/^/m0` 1.2 s (Neovim: 50 s).
+
+### Manual check
+
+This is the dogfooding point: try editing flux's own source with flux.
+
+1. Search: `/fn `, `n`/`N`, `*` on a name, `/foo/e`, `?`, a pattern with `\<` and `\v`,
+   `d/pat<CR>`, and `v` + `/pat<CR>`. Watch hlsearch and incsearch while typing; `:noh`.
+2. `:s`: `:%s/old/new/g`, with `c` to confirm, with `\(\)`/`\1`, `\u&`, `\r`; `u` afterwards;
+   `&`, `g&`, `:&&`. Watch the preview as you type.
+3. Ranges and line commands: `:.,+3d`, `:'<,'>>`, `:/start/,/end/y`, `:m0`, `:t.`, `:g/TODO/`,
+   `:g/^$/d`, `:v/./d`, `:5,10norm A;`.
+4. `:set nu rnu`, `:set ts=4 sw=4 et`, `:set ic scs`, `:setlocal sw=2` in one of two windows;
+   `:set sb spr` and split.
+5. Command line: `<Up>` after typing a prefix, cursor keys, `CTRL-R {register}`, and a long
+   `:g/pat/` listing paged with `-- More --`.
+
+Known gaps, for later: `\@` lookaround and back-references in patterns, `\%V`/`\%23l` and other
+position items, `\=` expressions in `:s`, `/pat/;/pat2/`, `|` between commands, Tab completion
+on the command line (it arrives with the pickers in M7), the command-line window (`q:`), and
+options not in the list above ('wrap', 'scrolloff', 'list', …). `:set` alone lists only the
+options above, so it shows less than Neovim's. A long command line typed at a prompt over an
+earlier multi-line message scrolls a little differently from Neovim.
 
 ## M5: Syntax highlighting
 

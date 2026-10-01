@@ -1,6 +1,7 @@
 //! Draws the editor into a grid: the window's text, the statusline and the command line.
 
 use flux_core::{GlyphKind, LineLayout, layout_line};
+use flux_view::search;
 use flux_view::{
     Buffer, CMDLINE_ROWS, Cursor, Editor, MessageKind, Mode, Rect, VisualKind, Window,
 };
@@ -18,6 +19,16 @@ const VISUAL: Style = Style {
     ..Style::fg(Color::Reset)
 };
 /// Vim's StatusLine (the current window) and StatusLineNC (the others).
+/// Vim's Search (every match of the last pattern, with 'hlsearch') and CurSearch / IncSearch
+/// (the match at the cursor, or the one 'incsearch' shows).
+const SEARCH: Style = Style {
+    bg: Color::Ansi(3),
+    ..Style::fg(Color::Ansi(0))
+};
+const CUR_SEARCH: Style = Style {
+    bg: Color::Ansi(11),
+    ..Style::fg(Color::Ansi(0))
+};
 const STATUS_LINE: Style = Style {
     reverse: true,
     bold: true,
@@ -25,6 +36,12 @@ const STATUS_LINE: Style = Style {
 };
 const STATUS_LINE_NC: Style = Style {
     reverse: true,
+    ..Style::fg(Color::Reset)
+};
+/// Vim's LineNr and CursorLineNr.
+const LINE_NR: Style = Style::fg(Color::Ansi(8));
+const CURSOR_LINE_NR: Style = Style {
+    bold: true,
     ..Style::fg(Color::Reset)
 };
 /// Vim's WinSeparator.
@@ -72,7 +89,7 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
         return Some(pos);
     }
     let size;
-    let showcmd = if showcmd.is_empty() && editor.mode == Mode::Visual {
+    let showcmd = if showcmd.is_empty() && editor.mode == Mode::Visual && editor.message.is_none() {
         size = selection_size(editor);
         size.as_str()
     } else {
@@ -104,6 +121,14 @@ impl Pane<'_> {
         self.win.id == self.editor.window.id
     }
 
+    /// The text to show: the buffer's, or the 'inccommand' preview of it.
+    fn text(&self) -> &flux_core::Text {
+        match &self.editor.preview {
+            Some(p) if self.win.buffer == self.editor.window.buffer => &p.text,
+            _ => &self.buffer().text,
+        }
+    }
+
     fn buffer(&self) -> &Buffer {
         self.editor
             .buffer(self.win.buffer)
@@ -119,18 +144,23 @@ impl Pane<'_> {
 
     fn draw_text(&self, grid: &mut Grid) -> Option<(usize, usize)> {
         let win = self.win;
-        let text = &self.buffer().text;
-        let (top_row, left) = (self.rect.row, self.rect.col);
+        let text = self.text();
         let text_rows = self.text_rows(grid);
-        let width = self.rect.width;
+        // The number column comes first; the text starts after it.
+        let numw = win
+            .opts
+            .number_width(text.line_count(), self.rect.height.max(1));
+        let (top_row, left) = (self.rect.row, self.rect.col + numw);
+        let width = self.rect.width.saturating_sub(numw).max(1);
         let insert = self.is_current() && self.editor.mode == Mode::Insert;
         let mut cursor = None;
         let mut row = 0;
         let mut line = win.top;
+        let matches = self.search_matches(win.top..(win.top + text_rows).min(text.line_count()));
         while row < text_rows && line < text.line_count() {
             let mut layout = layout_line(
                 &text.line_str(line),
-                self.editor.options.tabstop,
+                self.buffer().opts.tabstop,
                 Some(width),
             );
             // Rows of a too-tall top line scrolled off above the window (Vim's `w_skipcol`).
@@ -144,6 +174,9 @@ impl Pane<'_> {
             let fits = row + layout.row_count() <= text_rows;
             if !fits && line != win.top {
                 // Vim's `display=lastline`: show what fits and mark the cut with `@@@`.
+                if numw > 0 {
+                    self.draw_number(grid, line, top_row + row, numw);
+                }
                 draw_rows(grid, &layout, left, top_row + row, text_rows - row);
                 for x in width.saturating_sub(3)..width {
                     grid.set(left + x, top_row + text_rows - 1, "@", 1, NON_TEXT);
@@ -152,10 +185,37 @@ impl Pane<'_> {
                 break;
             }
             let shown = layout.row_count().min(text_rows - row);
+            if numw > 0 {
+                self.draw_number(grid, line, top_row + row, numw);
+            }
             draw_rows(grid, &layout, left, top_row + row, shown);
             if skip > 0 {
                 for x in 0..3.min(width) {
                     grid.set(left + x, top_row + row, "<", 1, NON_TEXT);
+                }
+            }
+            for &(start, end, current) in &matches {
+                if start.line > line || end.line < line {
+                    continue;
+                }
+                let from = if start.line == line { start.col } else { 0 };
+                let to = if end.line == line {
+                    end.col
+                } else {
+                    text.line_len(line) + 1
+                };
+                if from < to {
+                    let paint = if current { CUR_SEARCH } else { SEARCH };
+                    highlight_with(
+                        grid,
+                        &layout,
+                        left,
+                        width,
+                        top_row + row,
+                        shown,
+                        (from, to),
+                        paint,
+                    );
                 }
             }
             if let Some((from, to)) = self.selected_columns(line) {
@@ -172,16 +232,89 @@ impl Pane<'_> {
             line += 1;
         }
         for r in row..text_rows {
-            grid.set(left, top_row + r, "~", 1, NON_TEXT);
+            grid.set(self.rect.col, top_row + r, "~", 1, NON_TEXT);
         }
         cursor
+    }
+
+    /// The number column for `line`: its number ('number'), its distance from the cursor line
+    /// ('relativenumber'), or both (the cursor line's own number, left-aligned).
+    fn draw_number(&self, grid: &mut Grid, line: usize, y: usize, numw: usize) {
+        let opts = &self.win.opts;
+        let cur = self.win.cursor.line;
+        let digits = numw - 1;
+        let s = if opts.relativenumber {
+            if line == cur && opts.number {
+                format!("{:<digits$} ", line + 1)
+            } else {
+                format!("{:>digits$} ", line.abs_diff(cur))
+            }
+        } else {
+            format!("{:>digits$} ", line + 1)
+        };
+        let style = if opts.relativenumber && line == cur {
+            CURSOR_LINE_NR
+        } else {
+            LINE_NR
+        };
+        grid.put_str_until(self.rect.col, y, &s, style, self.rect.col + numw);
+    }
+
+    /// Matches to highlight in `lines`: every match of the last search pattern with
+    /// 'hlsearch' (or of the pattern being typed, with 'incsearch'), and whether it's the
+    /// current one (CurSearch/IncSearch).
+    fn search_matches(
+        &self,
+        lines: std::ops::Range<usize>,
+    ) -> Vec<(flux_view::Cursor, flux_view::Cursor, bool)> {
+        let editor = self.editor;
+        if let Some(p) = &editor.preview
+            && self.win.buffer == editor.window.buffer
+        {
+            return p
+                .highlights
+                .iter()
+                .filter(|(s, e)| e.line >= lines.start && s.line < lines.end)
+                .map(|&(s, e)| (s, e, false))
+                .collect();
+        }
+        let text = &self.buffer().text;
+        let typing = editor.mode == Mode::CmdLine && editor.cmdline_kind != ':';
+        let incsearch = if typing && self.is_current() {
+            editor.incsearch
+        } else {
+            None
+        };
+        let hls = editor.options.hlsearch && !editor.search.no_hlsearch;
+        let mut out = Vec::new();
+        let pattern = match (&editor.incsearch_pattern, typing) {
+            (Some(p), true) if hls => search::compile(editor, p, false).ok(),
+            _ if hls => editor
+                .search
+                .last_pattern()
+                .and_then(|p| search::compile(editor, &p.pat, p.no_smartcase).ok()),
+            _ => None,
+        };
+        if let Some(pattern) = pattern {
+            let cur = self.win.cursor;
+            for (s, e) in search::matches_in(text, &pattern, lines) {
+                let at_cursor = incsearch.is_none()
+                    && (s.line, s.col) <= (cur.line, cur.col)
+                    && (cur.line, cur.col) < (e.line, e.col);
+                out.push((s, e, at_cursor));
+            }
+        }
+        if let Some((s, e)) = incsearch {
+            out.push((s, e, true));
+        }
+        out
     }
 
     /// The selected chars of `line` as `[from, to)`, with `to` past the end when the line break
     /// is selected too. Like Vim, every window showing the current buffer shows the selection.
     fn selected_columns(&self, line: usize) -> Option<(usize, usize)> {
         let editor = self.editor;
-        if editor.mode != Mode::Visual || self.win.buffer != editor.window.buffer {
+        if !editor.visual_active() || self.win.buffer != editor.window.buffer {
             return None;
         }
         let a = editor.visual.anchor;
@@ -236,7 +369,14 @@ impl Pane<'_> {
         let buffer = self.buffer();
         let ruler = format!("{:<14} {}", self.cursor_ruler(), self.relative_position());
         // `%f %h%w%m%r `: the name, a space, the flags and another space.
-        let flags = if buffer.modified() { "[+]" } else { "" };
+        let current = self.win.buffer == self.editor.window.buffer;
+        let hidden = self.editor.hide_modified && current;
+        let previewed = current && self.editor.preview.as_ref().is_some_and(|p| p.changed);
+        let flags = if (buffer.modified() && !hidden) || previewed {
+            "[+]"
+        } else {
+            ""
+        };
         let name = format!("{} {flags} ", buffer.name());
         let (name_width, ruler_width) = (
             UnicodeWidthStr::width(name.as_str()),
@@ -264,7 +404,7 @@ impl Pane<'_> {
     /// `%l,%c%V`: line, byte column and, when different, screen column. An empty line is `0-1`.
     fn cursor_ruler(&self) -> String {
         let cursor = self.win.cursor;
-        let text = &self.buffer().text;
+        let text = self.text();
         let line = text.line_str(cursor.line.min(text.line_count().saturating_sub(1)));
         if line.is_empty() {
             // A buffer with no lines at all shows line 0.
@@ -280,7 +420,7 @@ impl Pane<'_> {
             .nth(cursor.col)
             .map_or(line.len(), |(i, _)| i)
             + 1;
-        let layout = layout_line(&line, self.editor.options.tabstop, None);
+        let layout = layout_line(&line, self.buffer().opts.tabstop, None);
         let insert = self.is_current() && self.editor.mode == Mode::Insert;
         let screen_col = layout.cursor_position(cursor.col, insert).1 + 1;
         if screen_col == byte_col {
@@ -292,19 +432,16 @@ impl Pane<'_> {
 
     /// `%P`: `All`, `Top`, `Bot`, or how far down the window is.
     fn relative_position(&self) -> String {
-        let buffer = self.buffer();
+        let text = self.text();
         let win = self.win;
         let metrics = flux_view::Metrics {
-            text: &buffer.text,
-            tabstop: self.editor.options.tabstop,
+            text,
+            tabstop: self.buffer().opts.tabstop,
             width: win.width,
             height: win.height,
         };
         let above = win.top;
-        let below = buffer
-            .text
-            .line_count()
-            .saturating_sub(win.bottom(&metrics) + 1);
+        let below = text.line_count().saturating_sub(win.bottom(&metrics) + 1);
         if below == 0 {
             if above == 0 { "All" } else { "Bot" }.to_string()
         } else if above == 0 {
@@ -342,6 +479,31 @@ fn highlight(
     from: usize,
     to: usize,
 ) {
+    highlight_with(
+        grid,
+        layout,
+        left,
+        width,
+        first_row,
+        rows,
+        (from, to),
+        VISUAL,
+    );
+}
+
+/// Paint chars `[from, to)` of a drawn line with `paint`'s background (and its foreground,
+/// unless that is the default). A line break in the range shows as one cell after the text.
+#[allow(clippy::too_many_arguments)]
+fn highlight_with(
+    grid: &mut Grid,
+    layout: &LineLayout,
+    left: usize,
+    width: usize,
+    first_row: usize,
+    rows: usize,
+    (from, to): (usize, usize),
+    paint: Style,
+) {
     let mut end_cell = (first_row, 0);
     for (r, glyphs) in layout.rows.iter().take(rows).enumerate() {
         let mut x = 0;
@@ -350,7 +512,12 @@ fn highlight(
                 let cell = grid.cell(left + x, first_row + r).clone();
                 if cell.width > 0 {
                     let style = Style {
-                        bg: VISUAL.bg,
+                        bg: paint.bg,
+                        fg: if paint.fg == Color::Reset {
+                            cell.style.fg
+                        } else {
+                            paint.fg
+                        },
                         ..cell.style
                     };
                     grid.set(left + x, first_row + r, &cell.symbol, cell.width, style);
@@ -368,7 +535,7 @@ fn highlight(
         .max()
         .unwrap_or(0);
     if to > len && from <= len && end_cell.1 < width {
-        grid.set(left + end_cell.1, end_cell.0, " ", 1, VISUAL);
+        grid.set(left + end_cell.1, end_cell.0, " ", 1, paint);
     }
 }
 
@@ -464,11 +631,45 @@ fn truncate_left(s: &str, room: usize) -> String {
     format!("<{}", tail.concat())
 }
 
+/// Just the command line, over a screen left as it was (see `Editor::stale_screen`).
+pub fn draw_cmdline_only(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
+    let y = grid.height().checked_sub(1)?;
+    grid.fill_row(y, Style::default());
+    draw_cmdline(editor, grid, y)
+}
+
 fn draw_cmdline(editor: &Editor, grid: &mut Grid, y: usize) -> Option<(usize, usize)> {
     match editor.mode {
         Mode::CmdLine => {
-            let end = grid.put_str(0, y, &format!(":{}", editor.cmdline), Style::default());
-            Some((end.min(grid.width() - 1), y))
+            let line = format!("{}{}", editor.cmdline_kind, editor.cmdline);
+            let width = grid.width().max(1);
+            // A command line too long for one row takes more, growing upward over the
+            // screen with a blank row above it (Neovim's 'msgsep').
+            let rows = UnicodeWidthStr::width(line.as_str()) / width + 1;
+            let first = (y + 1).saturating_sub(rows);
+            if rows > 1 {
+                for r in first.saturating_sub(1)..=y {
+                    grid.fill_row(r, Style::default());
+                }
+            }
+            for (row, piece) in (first..).zip(flux_view::editor::wrap(&line, width)) {
+                grid.put_str(0, row, &piece, Style::default());
+            }
+            let before: String = line.chars().take(editor.cmdline_pos + 1).collect();
+            let x = UnicodeWidthStr::width(before.as_str());
+            Some((x % width, (first + x / width).min(y)))
+        }
+        // In Visual mode a message (from a search) shows instead of the mode until the next
+        // key.
+        Mode::Visual if editor.message.is_some() => {
+            let message = editor.message.as_ref()?;
+            let style = if message.is_error() {
+                ERROR
+            } else {
+                Style::default()
+            };
+            grid.put_str(0, y, &message.text, style);
+            None
         }
         Mode::Insert | Mode::Visual => {
             let mode = match (editor.mode, editor.visual.kind) {
@@ -489,6 +690,16 @@ fn draw_cmdline(editor: &Editor, grid: &mut Grid, y: usize) -> Option<(usize, us
             draw_recording(editor, grid, 0, y);
             None
         }
+        Mode::Normal
+            if editor
+                .message
+                .as_ref()
+                .is_some_and(|m| m.kind == MessageKind::Question) =>
+        {
+            let text = &editor.message.as_ref()?.text;
+            let end = grid.put_str(0, y, text, MORE_MSG);
+            Some((end.min(grid.width() - 1), y))
+        }
         Mode::Normal => {
             if let Some(message) = &editor.message {
                 let style = if message.is_error() {
@@ -501,7 +712,9 @@ fn draw_cmdline(editor: &Editor, grid: &mut Grid, y: usize) -> Option<(usize, us
                 let text = match message.kind {
                     MessageKind::Info => truncate_middle(&message.text, room),
                     MessageKind::File => truncate_start(&message.text, room),
-                    MessageKind::Full | MessageKind::Error => message.text.clone(),
+                    MessageKind::Full | MessageKind::Error | MessageKind::Question => {
+                        message.text.clone()
+                    }
                 };
                 grid.put_str(0, y, &text, style);
             }
@@ -519,26 +732,42 @@ fn draw_recording(editor: &Editor, grid: &mut Grid, x: usize, y: usize) {
 
 /// Neovim's hit-enter prompt for a message longer than one line: a blank separator row, the
 /// message, and the prompt, drawn over the bottom of the screen.
-fn draw_hit_enter(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
+pub fn draw_hit_enter(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
     let message = editor.message.as_ref()?;
-    let width = grid.width().max(1);
-    let wrapped: Vec<String> = message
-        .text
-        .lines()
-        .flat_map(|line| wrap(line, width))
-        .collect();
+    let wrapped = editor.message_lines();
     let lines: Vec<&str> = wrapped.iter().map(String::as_str).collect();
     let height = grid.height();
-    let rows = (lines.len() + 2).min(height);
-    let first = height - rows;
-    for y in first..height {
-        grid.fill_row(y, Style::default());
-    }
     let style = if message.is_error() {
         ERROR
     } else {
         Style::default()
     };
+    if let Some(top) = editor.more_top {
+        // A page of a long message, then `-- More --` (or the prompt on the last page).
+        let page = height.saturating_sub(1);
+        let last_top = lines.len().saturating_sub(page);
+        let top = top.min(last_top);
+        for y in 0..height {
+            grid.fill_row(y, Style::default());
+        }
+        for (i, line) in lines[top..(top + page).min(lines.len())].iter().enumerate() {
+            grid.put_str(0, i, line, style);
+        }
+        let prompt = if top < last_top && editor.more_help {
+            "-- More -- SPACE/d/j: screen/page/line down, b/u/k: up, q: quit "
+        } else if top < last_top {
+            "-- More --"
+        } else {
+            "Press ENTER or type command to continue"
+        };
+        let end = grid.put_str(0, height - 1, prompt, MORE_MSG);
+        return Some((end.min(grid.width() - 1), height - 1));
+    }
+    let rows = (lines.len() + 2).min(height);
+    let first = height - rows;
+    for y in first..height {
+        grid.fill_row(y, Style::default());
+    }
     let shown = rows.saturating_sub(2);
     for (i, line) in lines[lines.len() - shown..].iter().enumerate() {
         grid.put_str(0, first + 1 + i, line, style);
@@ -550,22 +779,6 @@ fn draw_hit_enter(editor: &Editor, grid: &mut Grid) -> Option<(usize, usize)> {
         MORE_MSG,
     );
     Some((end.min(grid.width() - 1), height - 1))
-}
-
-/// Split `line` into pieces at most `width` cells wide.
-fn wrap(line: &str, width: usize) -> Vec<String> {
-    let mut out = vec![String::new()];
-    let mut used = 0;
-    for g in line.graphemes(true) {
-        let w = UnicodeWidthStr::width(g);
-        if used + w > width {
-            out.push(String::new());
-            used = 0;
-        }
-        out.last_mut().unwrap().push_str(g);
-        used += w;
-    }
-    out
 }
 
 #[cfg(test)]
@@ -637,6 +850,7 @@ mod tests {
 
         editor.mode = Mode::CmdLine;
         editor.cmdline = "q".into();
+        editor.cmdline_pos = 1;
         let (rows, cursor) = render(&editor);
         assert_eq!(rows[5], ":q");
         assert_eq!(cursor, Some((2, 5)));

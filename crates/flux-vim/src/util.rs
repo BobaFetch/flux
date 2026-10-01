@@ -1,7 +1,7 @@
 //! Small text helpers shared by motions, operators and Insert mode.
 
 use flux_core::chars;
-use flux_view::{Cursor, Editor, Options};
+use flux_view::{Cursor, Editor};
 
 pub type Pos = Cursor;
 
@@ -55,11 +55,11 @@ pub fn indent_width(s: &str, tabstop: usize) -> usize {
 }
 
 /// Blanks that indent to `width`: tabs then spaces, or only spaces with 'expandtab'.
-pub fn make_indent(width: usize, options: &Options) -> String {
+pub fn make_indent(width: usize, options: &flux_view::options::BufferOptions) -> String {
     if options.expandtab {
         " ".repeat(width)
     } else {
-        let tabs = width / options.tabstop;
+        let tabs = width / options.tabstop.max(1);
         "\t".repeat(tabs) + &" ".repeat(width - tabs * options.tabstop)
     }
 }
@@ -70,11 +70,25 @@ pub fn in_indent(s: &str, col: usize) -> bool {
 }
 
 /// Vim's messages for line counts, shown when more than 'report' (2) lines are involved.
-pub fn more_lines_message(delta: isize) -> Option<String> {
-    match delta {
-        d if d > 2 => Some(format!("{d} more lines")),
-        d if d < -2 => Some(format!("{} fewer lines", -d)),
-        _ => None,
+/// Vim's `msgmore`: `3 more lines`, `1 line less`, … when more than 'report' lines changed.
+pub fn more_lines_message(delta: isize, report: usize) -> Option<String> {
+    if delta == 0 || delta.unsigned_abs() <= report {
+        return None;
+    }
+    Some(match delta {
+        1 => "1 more line".to_string(),
+        -1 => "1 line less".to_string(),
+        d if d > 0 => format!("{d} more lines"),
+        d => format!("{} fewer lines", -d),
+    })
+}
+
+/// `N lines` (or `1 line`).
+pub fn lines(n: usize) -> String {
+    if n == 1 {
+        "1 line".to_string()
+    } else {
+        format!("{n} lines")
     }
 }
 
@@ -89,7 +103,7 @@ mod tests {
         assert_eq!(skip_white("    "), 4);
         assert_eq!(indent_of("\t x"), "\t ");
         assert_eq!(indent_width("  \t    a", 8), 12);
-        let options = Options::default();
+        let options = flux_view::options::BufferOptions::default();
         assert_eq!(make_indent(12, &options), "\t    ");
         assert!(in_indent("  x", 2));
         assert!(!in_indent("  x", 3));

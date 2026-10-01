@@ -72,6 +72,7 @@ for i, case in ipairs(cases) do
   for name, contents in pairs(case.files or {}) do
     vim.fn.writefile(vim.split(contents, "\n", { plain = true }), dir .. "/" .. name)
   end
+  vim.cmd("set all&")
   vim.cmd("silent! only!")
   vim.cmd("silent! %bwipeout!")
   vim.cmd("cd " .. vim.fn.fnameescape(dir))
@@ -82,6 +83,9 @@ for i, case in ipairs(cases) do
     vim.fn.setreg(r, "")
   end
   vim.fn.histdel(":")
+  vim.fn.histdel("/")
+  vim.fn.setreg("/", "")
+  vim.cmd("nohlsearch")
   vim.cmd("silent! delmarks A-Z0-9")
   vim.api.nvim_win_set_cursor(0, { case.cur[1] + 1, case.cur[2] })
   vim.cmd("redraw")

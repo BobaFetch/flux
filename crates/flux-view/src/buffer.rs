@@ -53,6 +53,8 @@ pub struct Buffer {
     /// The last Visual selection, for `gv`: anchor, cursor, kind and whether it went to the end
     /// of lines (`$`).
     pub last_visual: Option<(crate::Cursor, crate::Cursor, crate::VisualKind, bool)>,
+    /// Buffer-local options ('tabstop', …).
+    pub opts: crate::options::BufferOptions,
     disk: Option<DiskState>,
 }
 
@@ -71,6 +73,7 @@ impl Buffer {
             loaded: true,
             positions: Vec::new(),
             last_visual: None,
+            opts: Default::default(),
             disk: None,
         }
     }
@@ -109,6 +112,7 @@ impl Buffer {
         *self = Self {
             listed: self.listed,
             positions: std::mem::take(&mut self.positions),
+            opts: self.opts.clone(),
             ..fresh
         };
         Ok(())
@@ -279,6 +283,47 @@ impl Buffer {
         Ok(format!("\"{name}\"{new} {lines}L, {bytes}B written"))
     }
 
+    /// `:[range]w[!] [file]`: write lines `first..=last` (0-based). Writing part of the buffer
+    /// over its own file needs `!` (E140), as does overwriting another existing file (E13).
+    /// The buffer stays modified.
+    /// `own` says whether `target` is the buffer's own file.
+    pub fn write_lines(
+        &self,
+        target: &Path,
+        first: usize,
+        last: usize,
+        force: bool,
+        own: bool,
+    ) -> Result<String, String> {
+        if !force {
+            if own {
+                return Err("E140: Use ! to write partial buffer".into());
+            }
+            if target.exists() {
+                return Err("E13: File exists (add ! to override)".into());
+            }
+        }
+        let eol = match self.text.line_ending() {
+            flux_core::LineEnding::Lf => "\n",
+            flux_core::LineEnding::Crlf => "\r\n",
+        };
+        let mut contents = String::new();
+        for line in first..=last.min(self.text.last_line()) {
+            contents.push_str(&self.text.line_str(line));
+            contents.push_str(eol);
+        }
+        let existed = target.exists();
+        write_atomically(target, contents.as_bytes())
+            .map_err(|e| format!("E212: Can't open file for writing: {e}"))?;
+        let new = if existed { "" } else { " [New]" };
+        let n = last.min(self.text.last_line()) + 1 - first;
+        Ok(format!(
+            "\"{}\"{new} {n}L, {}B written",
+            target.display(),
+            contents.len()
+        ))
+    }
+
     /// Reload the file from disk. Like Vim's 'undoreload', the reload is itself an undoable
     /// change.
     pub fn reload(&mut self, cursor: (usize, usize)) -> io::Result<()> {
@@ -297,6 +342,7 @@ impl Buffer {
             after: a,
             no_lines_before: self.text.has_no_lines(),
             no_lines_after: new_text.has_no_lines(),
+            saved_lines: None,
         };
         self.text = new_text;
         self.invalid_utf8 = invalid_utf8;
@@ -411,6 +457,7 @@ mod tests {
             after: 0..1,
             no_lines_before: false,
             no_lines_after: false,
+            saved_lines: None,
         });
         assert!(buf.modified());
         let msg = buf.write(None, false).unwrap();

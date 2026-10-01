@@ -86,6 +86,23 @@ impl LineShift {
         }
     }
 
+    /// Lines `first..=last` may move in their own ways (see [`LineShift::adjust`]); every line
+    /// after `last` moves by `delta`, every line before `first` stays.
+    pub fn extent(&self) -> (usize, usize, isize) {
+        match &self.deleted {
+            Some(r) => (
+                r.start,
+                r.end.saturating_sub(1).max(r.start),
+                -(r.len() as isize),
+            ),
+            None => (
+                self.line,
+                self.line + self.removed,
+                self.inserted as isize - self.removed as isize,
+            ),
+        }
+    }
+
     /// Where a position ends up, or `None` if its line is deleted.
     pub fn adjust(&self, mut p: Cursor) -> Option<Cursor> {
         if let Some(deleted) = &self.deleted {

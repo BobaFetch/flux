@@ -119,6 +119,10 @@ pub enum Action {
     },
     /// `CTRL-^`: the alternate buffer, or buffer `count`.
     AlternateBuffer,
+    /// `&` (`:s` on this line) and `g&` (`:%s//~/&`).
+    RepeatSubstitute {
+        all: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,6 +370,7 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
                 }
                 _ => None,
             },
+            '&' => Some(Action::RepeatSubstitute { all: false }),
             'Z' => match k.next()?.typed_char() {
                 Some('Z') => Some(Action::WriteQuit),
                 Some('Q') => Some(Action::QuitDiscard),
@@ -379,6 +384,7 @@ fn parse_command(k: &mut Keys, recording: bool) -> Result<Parsed, NeedMore> {
                 Some('I') => Some(Action::Insert(InsertAt::LineStart)),
                 Some('v') => Some(Action::Reselect),
                 Some('i') => Some(Action::InsertAtLastInsert),
+                Some('&') => Some(Action::RepeatSubstitute { all: true }),
                 Some(c) => g_motion(c).map(Action::Move),
                 None => None,
             },
@@ -518,6 +524,14 @@ fn g_motion(c: char) -> Option<Motion> {
         'g' => Some(Motion::GotoFirstLine),
         'e' => Some(Motion::WordEndBackward(false)),
         'E' => Some(Motion::WordEndBackward(true)),
+        '*' => Some(Motion::SearchWord {
+            forward: true,
+            whole: false,
+        }),
+        '#' => Some(Motion::SearchWord {
+            forward: false,
+            whole: false,
+        }),
         _ => None,
     }
 }
@@ -554,6 +568,18 @@ fn motion(k: &mut Keys, key: Key) -> Result<Option<Motion>, NeedMore> {
             'H' => Some(Motion::WindowTop),
             'M' => Some(Motion::WindowMiddle),
             'L' => Some(Motion::WindowBottom),
+            '/' => Some(Motion::Search { forward: true }),
+            '?' => Some(Motion::Search { forward: false }),
+            'n' => Some(Motion::SearchNext { reverse: false }),
+            'N' => Some(Motion::SearchNext { reverse: true }),
+            '*' => Some(Motion::SearchWord {
+                forward: true,
+                whole: true,
+            }),
+            '#' => Some(Motion::SearchWord {
+                forward: false,
+                whole: true,
+            }),
             '\'' | '`' => {
                 let name = k.next()?.typed_char();
                 name.filter(|&n| n.is_ascii_alphabetic() || "'`[]<>.^\"".contains(n))

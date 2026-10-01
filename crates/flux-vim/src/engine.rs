@@ -37,6 +37,33 @@ pub struct Engine {
     pub(crate) failed: bool,
     /// The next command-line key names a register to insert (`CTRL-R`).
     cmdline_register: bool,
+    /// The next command-line key is inserted literally (`CTRL-V`).
+    cmdline_literal: bool,
+    /// Browsing the command-line history: the entry shown (counting back from the newest) and
+    /// the text typed before browsing, which entries must start with.
+    history_at: Option<(usize, String)>,
+    /// A command whose `/` or `?` motion is waiting for the pattern being typed.
+    pub(crate) search_cmd: Option<crate::search::PendingSearch>,
+    /// The pattern (and offset) typed for that command, while it runs.
+    pub(crate) search_input: Option<String>,
+    /// The view before 'incsearch' scrolled it.
+    pub(crate) saved_view: Option<crate::search::SavedView>,
+    /// While positive, edits keep going into the current undo step (`:normal`, `:g`).
+    pub(crate) hold_undo: usize,
+    /// An Ex command waiting for a yes/no answer (a backwards range to swap).
+    pub(crate) confirm_swap: Option<String>,
+    /// Swap a backwards range without asking (the answer was yes).
+    pub(crate) swap_range: bool,
+    /// A `:s///c` waiting for answers.
+    pub(crate) confirm_sub: Option<crate::substitute::ConfirmSession>,
+    /// Lines saved for undo by the change being built, when it isn't one range (`:s`).
+    pub(crate) saved_lines: Option<(usize, usize)>,
+    /// `:g` is running: its marked lines, in order (`None` once deleted).
+    pub(crate) global_lines: Option<crate::global::MarkedLines>,
+    /// While `:g` runs, `:s` adds up what it did here instead of reporting.
+    pub(crate) global_subs: (usize, usize),
+    /// The command line being run, as typed (output that starts below it shows it too).
+    pub(crate) typed_cmdline: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +107,11 @@ impl Engine {
         Self::default()
     }
 
+    /// A Normal or Visual command is partly typed.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending.is_empty() || !self.visual_pending.is_empty()
+    }
+
     /// The keys of a partly typed Normal-mode command (Vim's 'showcmd').
     pub fn pending_keys(&self) -> &[Key] {
         &self.pending
@@ -95,12 +127,129 @@ impl Engine {
 
     /// A key, typed or replayed (macros, `.`).
     pub(crate) fn process_key(&mut self, editor: &mut Editor, key: Key) {
+        editor.keep_msg = false;
+        if self.confirm_sub.is_some() {
+            self.confirm_key(editor, key);
+            editor.with_window(|win, m| win.scroll_to_cursor(m));
+            return;
+        }
+        // A yes/no question (Vim's `ask_yesno`): only y, n, <Esc> and CTRL-C answer it.
+        if let Some(line) = self.confirm_swap.take() {
+            let answer = match (key.code, key.mods) {
+                (KeyCode::Char('y'), Modifiers::NONE) => Some(true),
+                (KeyCode::Char('n'), Modifiers::NONE) | (KeyCode::Esc, _) => Some(false),
+                (KeyCode::Char('c'), Modifiers::CTRL) => Some(false),
+                _ => None,
+            };
+            match answer {
+                None => self.confirm_swap = Some(line),
+                Some(yes) => {
+                    // The answer is echoed after the question; what the command then reports
+                    // goes below it.
+                    let question = editor.message.take().map(|m| m.text).unwrap_or_default();
+                    let echoed = format!("{question}{}", if yes { 'y' } else { 'n' });
+                    if yes {
+                        self.swap_range = true;
+                        ex::run(self, editor, &line);
+                        self.swap_range = false;
+                        self.commit(editor);
+                    }
+                    match editor.message.take() {
+                        Some(m) => editor.full_message(format!("{echoed}\n{}", m.text)),
+                        None => editor.info(echoed),
+                    }
+                }
+            }
+            return;
+        }
+        // Paging through a long message (Vim's `-- More --`).
+        if let Some(top) = editor.more_top {
+            let page = editor.screen_size().1.saturating_sub(1).max(1);
+            let last_top = editor.message_lines().len().saturating_sub(page);
+            let at_end = top >= last_top;
+            let ch = if key.mods == Modifiers::NONE {
+                key.typed_char()
+            } else {
+                None
+            };
+            let back = match (key.code, ch) {
+                (KeyCode::Up, _) | (_, Some('k')) => Some(top.saturating_sub(1)),
+                (KeyCode::PageUp, _) | (_, Some('b')) => Some(top.saturating_sub(page)),
+                (_, Some('u')) => Some(top.saturating_sub(editor.screen_size().1 / 2)),
+                (_, Some('g')) => Some(0),
+                _ => None,
+            };
+            editor.more_help = false;
+            editor.more_max_row = editor.more_max_row.max(top + page);
+            if let Some(t) = back {
+                editor.more_top = Some(t);
+                return;
+            }
+            if !at_end {
+                let next = match (key.code, ch) {
+                    (KeyCode::PageDown, _) | (_, Some(' ' | 'f')) => Some(top + page),
+                    (KeyCode::Enter | KeyCode::Down, _) | (_, Some('j')) => Some(top + 1),
+                    (_, Some('d')) => Some(top + editor.screen_size().1 / 2),
+                    (_, Some('G')) => Some(last_top),
+                    _ => None,
+                };
+                if let Some(t) = next {
+                    let t = t.min(last_top);
+                    editor.more_top = Some(t);
+                    // Reaching the last page lets the command finish.
+                    editor.more_max_row = if t >= last_top {
+                        usize::MAX / 2
+                    } else {
+                        editor.more_max_row.max(t + page)
+                    };
+                    return;
+                }
+                let quit =
+                    matches!(key.code, KeyCode::Esc) || ch == Some('q') || key == Key::ctrl('c');
+                if quit || ch == Some(':') {
+                    // Vim pages while the command runs, so quitting stops it at the first
+                    // line not shown yet (scrolling back doesn't undo what ran).
+                    let row = editor.more_max_row.max(top + page);
+                    let line = editor.message_line_at(row);
+                    let pos = editor
+                        .message_positions
+                        .get(..=line)
+                        .and_then(|p| p.iter().rev().find_map(|c| *c));
+                    if let Some(p) = pos {
+                        // The view never followed the lines the command didn't reach.
+                        if let Some(top) = editor.more_restore_top {
+                            editor.window.top = top;
+                        }
+                        editor.window.cursor = p;
+                        editor.with_window(|w, m| w.scroll_to_cursor(m));
+                    }
+                    editor.more_top = None;
+                    editor.hit_enter = false;
+                    editor.message = None;
+                    if quit {
+                        return;
+                    }
+                    // The command line comes up over the message, which stays until the
+                    // command runs.
+                    editor.stale_screen = true;
+                } else {
+                    editor.more_help = true;
+                    return;
+                }
+            } else {
+                editor.more_top = None;
+            }
+        }
         // The hit-enter prompt: any key dismisses it; <CR>, <Space> and <Esc> do nothing else.
         if editor.hit_enter {
             editor.hit_enter = false;
             editor.message = None;
+            if key == Key::char(':') {
+                editor.stale_screen = true;
+            }
             if key == Key::plain(KeyCode::Enter)
                 || key == Key::char(' ')
+                || key == Key::char('q')
                 || key == Key::plain(KeyCode::Esc)
             {
                 return;
@@ -127,6 +276,17 @@ impl Engine {
                 }
             }
         }
+        // A kept message comes back when its command is over.
+        if editor.mode == Mode::Normal
+            && self.pending.is_empty()
+            && self.insert.is_none()
+            && let Some(m) = editor.kept_message.take()
+            && !editor.hit_enter
+        {
+            editor.message = Some(m);
+        }
+        // The number column may have grown or shrunk.
+        editor.refresh_window_widths();
         editor.with_window(|win, m| win.scroll_to_cursor(m));
     }
 
@@ -141,6 +301,16 @@ impl Engine {
             Parse::Done(command) => {
                 self.pending.clear();
                 editor.with_window(|win, m| win.update_curswant(m, false));
+                if self.search_input.is_none()
+                    && let Some(forward) = typed_search(&command.action)
+                {
+                    self.start_search(
+                        editor,
+                        forward,
+                        crate::search::PendingSearch::Normal(command),
+                    );
+                    return;
+                }
                 self.run(editor, command);
                 if editor.mode == Mode::Normal {
                     self.commit(editor);
@@ -227,7 +397,7 @@ impl Engine {
                 return;
             };
             for _ in 0..count {
-                ex::execute(editor, &cmd.text);
+                ex::run(self, editor, &cmd.text);
             }
             return;
         }
@@ -260,6 +430,10 @@ impl Engine {
         let first = self.change.is_none();
         let shift = LineShift::of(editor.text(), &edit);
         editor.current_buffer_mut().marks.adjust(&shift);
+        // Lines `:g` has yet to visit move along (and are forgotten when deleted).
+        if let Some(lines) = self.global_lines.as_mut() {
+            lines.adjust(&shift);
+        }
         editor.adjust_other_windows(&shift);
         if let Some(p) = editor.window.pcmark {
             editor.window.pcmark = shift.adjust(p).or(Some(p));
@@ -294,6 +468,9 @@ impl Engine {
 
     /// Finish the undo step being built, if any.
     pub(crate) fn commit(&mut self, editor: &mut Editor) {
+        if self.hold_undo > 0 {
+            return;
+        }
         let Some(mut builder) = self.change.take() else {
             return;
         };
@@ -310,6 +487,7 @@ impl Engine {
             after,
             no_lines_before: builder.no_lines_before,
             no_lines_after: buffer.text.has_no_lines(),
+            saved_lines: self.saved_lines.take(),
         });
     }
 
@@ -348,8 +526,13 @@ impl Engine {
             }
             buffer.text.set_no_lines(no_lines);
             // A buffer with no lines has 0 lines, not one empty one.
-            old_lines += if was_empty { 0 } else { region_before.len() };
-            new_lines += if no_lines { 0 } else { region_after.len() };
+            let (saved_before, saved_after) = match change.saved_lines {
+                Some((b, a)) if redo => (b, a),
+                Some((b, a)) => (a, b),
+                None => (region_before.len(), region_after.len()),
+            };
+            old_lines += if was_empty { 0 } else { saved_before };
+            new_lines += if no_lines { 0 } else { saved_after };
             let cursor = restore_cursor(editor, region_after.clone(), change.cursor_before);
             editor.window.cursor = cursor;
             last = Some(step);
@@ -391,9 +574,14 @@ impl Engine {
     }
 
     pub(crate) fn enter_cmdline(&mut self, editor: &mut Editor) {
+        // The view to go back to after 'incsearch' or 'inccommand' moved it.
+        self.saved_view = Some(crate::search::SavedView::of(editor));
         editor.mode = Mode::CmdLine;
         editor.cmdline.clear();
+        editor.cmdline_pos = 0;
+        editor.cmdline_kind = ':';
         editor.message = None;
+        self.history_at = None;
     }
 }
 
@@ -418,44 +606,266 @@ fn restore_cursor(editor: &Editor, changed: std::ops::Range<usize>, before: (usi
 
 impl Engine {
     fn cmdline_key(&mut self, editor: &mut Editor, key: Key) {
+        let before = editor.cmdline.clone();
+        self.cmdline_edit(editor, key);
+        if editor.mode == Mode::CmdLine && editor.cmdline != before {
+            self.update_incsearch(editor);
+        }
+        // 'inccommand': preview `:s` while it's typed, with the cursor on its first match.
+        editor.preview = None;
+        if editor.mode == Mode::CmdLine && editor.cmdline_kind == ':' {
+            if let Some(v) = self.saved_view {
+                editor.window.top = v.top;
+                editor.window.cursor = v.cursor;
+            }
+            let botline = editor.with_window(|w, m| w.bottom(m) + 1);
+            editor.preview = crate::substitute::preview(editor, &editor.cmdline, botline);
+            // 'incsearch' for the pattern even if the rest doesn't parse.
+            let cursor = match &editor.preview {
+                Some(p) => p.first_match,
+                None => crate::substitute::pattern_match(editor, &editor.cmdline),
+            };
+            if let Some(p) = cursor {
+                let line = p.line.min(editor.text().last_line());
+                // The cursor may be past the end of the line here (a match of `\n`).
+                let col = p.col.min(editor.text().line_len(line));
+                editor.window.cursor = crate::util::pos(line, col);
+                editor.with_window(|w, m| w.scroll_to_cursor(m));
+            }
+        }
+    }
+
+    fn cmdline_edit(&mut self, editor: &mut Editor, key: Key) {
         if std::mem::take(&mut self.cmdline_register) {
             if let Some(name) = key.typed_char()
                 && let Some(reg) = editor.register(Some(name))
             {
                 let text = reg.text.trim_end_matches('\n').replace('\n', "\r");
-                editor.cmdline.push_str(&text);
+                insert_at_cursor(editor, &text);
             }
             return;
         }
-        let leave = |editor: &mut Editor| {
-            editor.mode = Mode::Normal;
-            editor.cmdline.clear();
-        };
+        if std::mem::take(&mut self.cmdline_literal) {
+            if let Some(c) = literal_char(key) {
+                insert_at_cursor(editor, &c.to_string());
+            }
+            return;
+        }
+        let pos = editor.cmdline_pos.min(editor.cmdline.chars().count());
+        let len = editor.cmdline.chars().count();
+        if !matches!(
+            key.code,
+            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
+        ) && !matches!(
+            (key.code, key.mods),
+            (KeyCode::Char('p' | 'n'), Modifiers::CTRL)
+        ) {
+            self.history_at = None;
+        }
         match (key.code, key.mods) {
-            (KeyCode::Enter, _) => {
+            (KeyCode::Enter, _) | (KeyCode::Char('m' | 'j'), Modifiers::CTRL) => {
                 let line = std::mem::take(&mut editor.cmdline);
+                editor.cmdline_pos = 0;
                 editor.mode = Mode::Normal;
+                if editor.cmdline_kind == ':' {
+                    self.restore_view(editor);
+                }
+                if editor.cmdline_kind != ':' {
+                    self.finish_search(editor, Some(line));
+                    return;
+                }
+                editor.search.add_history(false, &line);
                 // The typed command stays visible, as in Vim, unless the command reports
                 // something.
                 editor.info(format!(":{line}"));
-                ex::execute(editor, &line);
+                self.typed_cmdline = Some(line.clone());
+                ex::run(self, editor, &line);
+                self.typed_cmdline = None;
+                self.commit(editor);
                 // `":` holds the last command once it has run.
                 if !line.trim().is_empty() {
                     editor.registers.set_readonly(':', line);
                 }
             }
-            (KeyCode::Esc, _) | (KeyCode::Char('c'), Modifiers::CTRL) => leave(editor),
+            (KeyCode::Esc, _) | (KeyCode::Char('c'), Modifiers::CTRL) => self.leave_cmdline(editor),
             (KeyCode::Backspace, _) | (KeyCode::Char('h'), Modifiers::CTRL) => {
-                if editor.cmdline.pop().is_none() {
-                    leave(editor);
+                if editor.cmdline.is_empty() {
+                    self.leave_cmdline(editor);
+                } else if pos > 0 {
+                    remove_chars(editor, pos - 1, pos);
                 }
             }
-            (KeyCode::Char('u'), Modifiers::CTRL) => editor.cmdline.clear(),
-            (KeyCode::Char('w'), Modifiers::CTRL) => delete_word_before(&mut editor.cmdline),
+            (KeyCode::Delete, _) => {
+                if pos < len {
+                    remove_chars(editor, pos, pos + 1);
+                } else if pos > 0 {
+                    remove_chars(editor, pos - 1, pos);
+                } else if editor.cmdline.is_empty() {
+                    self.leave_cmdline(editor);
+                }
+            }
+            (KeyCode::Char('u'), Modifiers::CTRL) => remove_chars(editor, 0, pos),
+            (KeyCode::Char('w'), Modifiers::CTRL) => {
+                let head: String = editor.cmdline.chars().take(pos).collect();
+                let mut cut = head.clone();
+                delete_word_before(&mut cut);
+                let from = cut.chars().count();
+                remove_chars(editor, from, pos);
+            }
             (KeyCode::Char('r'), Modifiers::CTRL) => self.cmdline_register = true,
-            (KeyCode::Char(c), Modifiers::NONE) => editor.cmdline.push(c),
+            (KeyCode::Char('v' | 'q'), Modifiers::CTRL) => self.cmdline_literal = true,
+            (KeyCode::Left, m) if m == Modifiers::NONE => {
+                editor.cmdline_pos = pos.saturating_sub(1)
+            }
+            (KeyCode::Right, m) if m == Modifiers::NONE => editor.cmdline_pos = (pos + 1).min(len),
+            (KeyCode::Left, _) => editor.cmdline_pos = word_left(&editor.cmdline, pos),
+            (KeyCode::Right, _) => editor.cmdline_pos = word_right(&editor.cmdline, pos),
+            (KeyCode::Home, _) | (KeyCode::Char('b'), Modifiers::CTRL) => editor.cmdline_pos = 0,
+            (KeyCode::End, _) | (KeyCode::Char('e'), Modifiers::CTRL) => editor.cmdline_pos = len,
+            (KeyCode::Up, m) | (KeyCode::Down, m) => {
+                let older = key.code == KeyCode::Up;
+                // Up/Down match what was typed; Shift or CTRL-P/CTRL-N don't.
+                self.browse_history(editor, older, m == Modifiers::NONE);
+            }
+            (KeyCode::PageUp, _) => self.browse_history(editor, true, false),
+            (KeyCode::PageDown, _) => self.browse_history(editor, false, false),
+            (KeyCode::Char('p'), Modifiers::CTRL) => self.browse_history(editor, true, false),
+            (KeyCode::Char('n'), Modifiers::CTRL) => self.browse_history(editor, false, false),
+            (KeyCode::Tab, m) if m == Modifiers::NONE => insert_at_cursor(editor, "\t"),
+            (KeyCode::Char(c), Modifiers::NONE) => insert_at_cursor(editor, &c.to_string()),
             _ => {}
         }
+    }
+
+    /// `<Esc>` on the command line.
+    fn leave_cmdline(&mut self, editor: &mut Editor) {
+        editor.mode = Mode::Normal;
+        editor.cmdline.clear();
+        editor.cmdline_pos = 0;
+        if editor.cmdline_kind == ':' {
+            self.restore_view(editor);
+        }
+        if editor.cmdline_kind != ':' {
+            self.finish_search(editor, None);
+        }
+    }
+
+    /// `<Up>`/`<Down>` (matching the typed prefix) and `<S-Up>`/`CTRL-P`, … on the command
+    /// line.
+    fn browse_history(&mut self, editor: &mut Editor, older: bool, prefix: bool) {
+        let history = if editor.cmdline_kind == ':' {
+            &editor.search.cmd_history
+        } else {
+            &editor.search.search_history
+        };
+        let (at, typed) = self
+            .history_at
+            .clone()
+            .unwrap_or((0, editor.cmdline.clone()));
+        let matches = |e: &String| !prefix || e.starts_with(&typed);
+        // `at` counts back from the newest entry; 0 is the typed text itself.
+        let mut next = at;
+        let found = loop {
+            if older {
+                next += 1;
+                if next > history.len() {
+                    break None;
+                }
+            } else {
+                if next == 0 {
+                    break None;
+                }
+                next -= 1;
+                if next == 0 {
+                    break Some(typed.clone());
+                }
+            }
+            let entry = &history[history.len() - next];
+            if matches(entry) {
+                break Some(entry.clone());
+            }
+        };
+        if let Some(text) = found {
+            editor.cmdline_pos = text.chars().count();
+            editor.cmdline = text;
+            self.history_at = Some((next, typed));
+            self.update_incsearch(editor);
+        }
+    }
+}
+
+fn insert_at_cursor(editor: &mut Editor, s: &str) {
+    let pos = editor.cmdline_pos.min(editor.cmdline.chars().count());
+    let at = editor
+        .cmdline
+        .char_indices()
+        .nth(pos)
+        .map_or(editor.cmdline.len(), |(i, _)| i);
+    editor.cmdline.insert_str(at, s);
+    editor.cmdline_pos = pos + s.chars().count();
+}
+
+/// Remove chars `[from, to)` of the command line, leaving the cursor at `from`.
+fn remove_chars(editor: &mut Editor, from: usize, to: usize) {
+    let s: String = editor
+        .cmdline
+        .chars()
+        .enumerate()
+        .filter(|&(i, _)| i < from || i >= to)
+        .map(|(_, c)| c)
+        .collect();
+    editor.cmdline = s;
+    editor.cmdline_pos = from;
+}
+
+/// `<S-Left>` on the command line: to the start of the previous word.
+fn word_left(s: &str, pos: usize) -> usize {
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = pos;
+    while i > 0 && chars[i - 1] == ' ' {
+        i -= 1;
+    }
+    while i > 0 && chars[i - 1] != ' ' {
+        i -= 1;
+    }
+    i
+}
+
+/// `<S-Right>`: past the next word and the blanks after it.
+fn word_right(s: &str, pos: usize) -> usize {
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = pos;
+    while i < chars.len() && chars[i] != ' ' {
+        i += 1;
+    }
+    while i < chars.len() && chars[i] == ' ' {
+        i += 1;
+    }
+    i
+}
+
+/// The character `CTRL-V {key}` inserts.
+fn literal_char(key: Key) -> Option<char> {
+    match (key.code, key.mods) {
+        (KeyCode::Char(c), m) if m == Modifiers::CTRL && c.is_ascii_alphabetic() => {
+            Some(char::from(c.to_ascii_uppercase() as u8 - b'@'))
+        }
+        (KeyCode::Char(c), _) => Some(c),
+        (KeyCode::Tab, _) => Some('\t'),
+        (KeyCode::Enter, _) => Some('\r'),
+        (KeyCode::Esc, _) => Some('\x1b'),
+        _ => None,
+    }
+}
+
+/// The direction of a `/` or `?` in a command, which needs a pattern typed first.
+fn typed_search(action: &parse::Action) -> Option<bool> {
+    use crate::motion::Motion;
+    use parse::{Action, OpTarget};
+    match action {
+        Action::Move(Motion::Search { forward })
+        | Action::Operate(_, OpTarget::Motion(Motion::Search { forward })) => Some(*forward),
+        _ => None,
     }
 }
 
