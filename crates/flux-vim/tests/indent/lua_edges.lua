@@ -1,0 +1,29 @@
+local t = {
+  fn = function(a)
+    return a
+  end,
+  nested = { 1, 2,
+  3 },
+}
+callback(function()
+  print("x")
+end)
+setup({
+  key = "value",
+})
+--[[ block
+comment ]]
+local s = [[
+long string
+]]
+local function one() return 1 end
+if x then -- comment
+  y()
+else -- else comment
+  z()
+end
+local n = 0
+repeat n = n + 1 until n > 3
+local tbl = {}
+for i, v in ipairs(tbl) do print(i) end
+return t
