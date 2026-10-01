@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::ops::{ControlFlow, Range};
 use std::time::{Duration, Instant};
 
-use flux_core::{Edits, Text};
+use flux_core::{Revision, Text};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{
     InputEdit, Node, ParseOptions, ParseState, Parser, Point, QueryCursor, Range as TsRange, Tree,
@@ -47,8 +47,8 @@ pub struct Syntax {
     lang: &'static Lang,
     parser: Parser,
     tree: Option<Tree>,
-    /// The [`Text::id`] the tree follows.
-    text_id: u64,
+    /// The revision of the text the tree follows.
+    seen: Revision,
     /// Edits were applied to the tree's positions but it hasn't been parsed since.
     stale: bool,
     /// A parse ran out of time; the parser keeps its state to resume it.
@@ -115,7 +115,7 @@ impl Syntax {
             lang,
             parser,
             tree: None,
-            text_id: 0,
+            seen: Revision::default(),
             stale: true,
             resuming: false,
             injections: RefCell::default(),
@@ -130,14 +130,13 @@ impl Syntax {
     /// Follow `text`'s edits since the last call: the tree's positions move with them, without
     /// reparsing (enough to keep highlights and string/comment lookups in place after small
     /// edits, such as reindenting).
-    fn follow(&mut self, text: &mut Text) {
-        let edits = text.take_edits();
-        if text.id() == self.text_id && matches!(&edits, Edits::Known(e) if e.is_empty()) {
+    fn follow(&mut self, text: &Text) {
+        if text.revision() == self.seen {
             return;
         }
-        match (self.tree.as_mut(), edits) {
-            (Some(tree), Edits::Known(edits)) if text.id() == self.text_id => {
-                for e in edits {
+        match (self.tree.as_mut(), text.edits_since(self.seen)) {
+            (Some(tree), Some(edits)) => {
+                for e in edits.map(|e| e.bytes) {
                     tree.edit(&InputEdit {
                         start_byte: e.start_byte,
                         old_end_byte: e.old_end_byte,
@@ -148,13 +147,11 @@ impl Syntax {
                     });
                 }
             }
-            (None, Edits::Known(_)) if text.id() == self.text_id => {}
+            (None, Some(_)) => {}
             // Another text, or edits that weren't kept: start over.
-            _ => {
-                self.tree = None;
-                self.text_id = text.id();
-            }
+            (_, None) => self.tree = None,
         }
+        self.seen = text.revision();
         self.stale = true;
         if self.resuming {
             // The parse that ran out of time was of older text.
@@ -168,7 +165,7 @@ impl Syntax {
     /// parsing for at most `budget` (with `None`, only [`Syntax::follow`] the edits). Returns
     /// whether the tree is up to date; if not, the next call goes on from where this one
     /// stopped, and the tree as it was (moved by the edits) is used meanwhile.
-    pub fn update(&mut self, text: &mut Text, budget: Option<Duration>) -> bool {
+    pub fn update(&mut self, text: &Text, budget: Option<Duration>) -> bool {
         self.follow(text);
         if !self.stale {
             return true;
@@ -207,7 +204,7 @@ impl Syntax {
         let Some(tree) = &self.tree else {
             return Vec::new();
         };
-        if text.id() != self.text_id {
+        if text.revision() != self.seen {
             return Vec::new();
         }
         let p = Point {
@@ -235,7 +232,7 @@ impl Syntax {
         let Some(tree) = &self.tree else {
             return Vec::new();
         };
-        if text.id() != self.text_id || lines.start >= text.line_count() {
+        if text.revision() != self.seen || lines.start >= text.line_count() {
             return Vec::new();
         }
         let rope = text.rope();

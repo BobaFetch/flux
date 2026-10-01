@@ -11,6 +11,7 @@ authors.workspace = true
 flux-core.workspace = true
 flux-view.workspace = true
 flux-syntax.workspace = true
+serde_json.workspace = true
 unicode-width.workspace = true
 
 [lints]

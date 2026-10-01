@@ -9,6 +9,7 @@ mod global;
 mod indent;
 mod insert;
 pub mod key;
+pub mod lsp;
 pub mod motion;
 mod normal;
 mod open_line;

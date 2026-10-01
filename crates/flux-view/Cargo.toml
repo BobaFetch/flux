@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 flux-core.workspace = true
+flux-lsp.workspace = true
 flux-syntax.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true

@@ -731,6 +731,7 @@ impl Engine {
             }
         }
         self.commit(editor);
+        editor.lsp_show_held_diagnostics();
         if let Some(dot) = self.recording.take() {
             self.set_dot(dot);
         }

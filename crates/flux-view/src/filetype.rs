@@ -153,6 +153,8 @@ impl Editor {
         if buffer.syntax.as_ref().map(|s| s.lang()) != lang {
             buffer.syntax = lang.and_then(flux_syntax::Syntax::new);
         }
+        // Language servers enabled for the filetype attach (`vim.lsp.enable`).
+        self.lsp_attach(id);
     }
 
     /// Bring the syntax trees of the buffers on screen up to date with their text.

@@ -113,6 +113,8 @@ pub struct Editor {
     pub filetype: crate::filetype::FiletypeSettings,
     /// The brackets MatchParen highlights in the current window (see [`crate::matchparen`]).
     pub matchparen: Option<[Cursor; 2]>,
+    /// Language servers (see [`crate::lsp`]).
+    pub lsp: crate::lsp::LspState,
     pub registers: Registers,
     /// A message longer than one line is on screen, waiting for a key (Vim's hit-enter prompt).
     pub hit_enter: bool,
@@ -203,6 +205,7 @@ impl Editor {
             syntax_on: true,
             filetype: Default::default(),
             matchparen: None,
+            lsp: Default::default(),
             registers: Registers::default(),
             hit_enter: false,
             more_top: None,
@@ -284,6 +287,11 @@ impl Editor {
         buffer.created_in(self.window.id);
         self.buffers.push(buffer);
         id
+    }
+
+    /// Add `buffer` without showing it.
+    pub(crate) fn add_buffer_hidden(&mut self, buffer: Buffer) -> BufferId {
+        self.add_buffer(buffer)
     }
 
     /// A new empty buffer (`:enew`, `:new`).
@@ -434,10 +442,12 @@ impl Editor {
             w.scroll_to_cursor(m);
         });
         if let Some(old) = self.unload_on_switch.take()
-            && let Some(b) = self.buffer_mut(old)
-            && b.path.is_some()
+            && self.buffer(old).is_some_and(|b| b.path.is_some())
         {
-            b.unload();
+            self.lsp_detach(old);
+            if let Some(b) = self.buffer_mut(old) {
+                b.unload();
+            }
         }
     }
 
@@ -505,6 +515,7 @@ impl Editor {
                 w.jumps.remove_buffer(id);
             }
         }
+        self.lsp_detach(id);
         if wipe {
             self.buffers.retain(|b| b.id != id);
             self.global_marks.retain(|_, (b, _)| *b != id);

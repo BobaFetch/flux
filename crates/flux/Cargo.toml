@@ -13,12 +13,13 @@ path = "src/main.rs"
 
 [dependencies]
 flux-view.workspace = true
+flux-lsp.workspace = true
 flux-vim.workspace = true
 flux-tui.workspace = true
 anyhow.workspace = true
 crossterm.workspace = true
 futures.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [lints]
 workspace = true

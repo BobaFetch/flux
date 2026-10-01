@@ -682,6 +682,7 @@ fn write_buffer(
         buffer.path = Some(cwd.join(p));
     }
     let result = buffer.write(target.as_deref(), force);
+    let saved_own = result.is_ok() && (target.is_none() || target == buffer.path);
     // Keep the name as the user gave it (or name an unnamed buffer as `:w file` typed it).
     buffer.path = match (own, &buffer.path) {
         (Some(p), _) => Some(p),
@@ -693,6 +694,9 @@ fn write_buffer(
         ),
         (None, None) => None,
     };
+    if saved_own {
+        editor.lsp_did_save(id);
+    }
     result.map(|msg| msg.replace(&format!("{}/", cwd.display()), ""))
 }
 

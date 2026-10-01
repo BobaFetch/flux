@@ -6,6 +6,7 @@ pub mod explorer;
 pub mod filetype;
 pub mod highlight;
 pub mod layout;
+pub mod lsp;
 pub mod marks;
 pub mod matchparen;
 pub mod options;

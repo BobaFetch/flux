@@ -5,6 +5,7 @@
 //! way.
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -39,17 +40,24 @@ pub struct ByteEdit {
     pub new_end: BytePoint,
 }
 
-/// The edits made to a [`Text`] since they were last taken, for keeping a parse tree in step.
+/// One edit as readers of a text's history see it: in bytes and byte points (for tree-sitter
+/// and language servers), and the text inserted.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Edits {
-    /// The text was made from these edits, in order.
-    Known(Vec<ByteEdit>),
-    /// The text is not the one last seen (or too many edits were made): start over.
-    Unknown,
+pub struct LoggedEdit {
+    pub bytes: ByteEdit,
+    pub text: String,
 }
 
-/// Edits kept for a reader at most; past this nobody is reading them, and a fresh parse is
-/// cheaper than replaying them anyway.
+/// A text's place in its history, for readers that follow its edits (a parse tree, a
+/// language server): see [`Text::edits_since`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Revision {
+    id: u64,
+    n: u64,
+}
+
+/// Edits kept for readers at most; a reader further behind starts over, which is cheaper than
+/// replaying that many anyway.
 const MAX_LOGGED_EDITS: usize = 10_000;
 
 static NEXT_TEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -69,8 +77,10 @@ pub struct Text {
     /// Identifies this text's line of edits: a new or cloned text gets a new id, so a reader
     /// that followed another one knows to start over.
     id: u64,
-    /// Edits since the last [`Text::take_edits`], or `None` if they were too many to keep.
-    edits: Option<Vec<ByteEdit>>,
+    /// How many edits were made.
+    revision: u64,
+    /// The latest edits; the first one made the text revision `revision - edits.len()`.
+    edits: VecDeque<LoggedEdit>,
 }
 
 impl Clone for Text {
@@ -81,7 +91,8 @@ impl Clone for Text {
             final_eol: self.final_eol,
             no_lines: self.no_lines,
             id: next_id(),
-            edits: Some(Vec::new()),
+            revision: 0,
+            edits: VecDeque::new(),
         }
     }
 }
@@ -94,7 +105,8 @@ impl Default for Text {
             final_eol: true,
             no_lines: true,
             id: next_id(),
-            edits: Some(Vec::new()),
+            revision: 0,
+            edits: VecDeque::new(),
         }
     }
 }
@@ -117,22 +129,35 @@ impl Text {
             final_eol,
             no_lines: contents.is_empty(),
             id: next_id(),
-            edits: Some(Vec::new()),
+            revision: 0,
+            edits: VecDeque::new(),
         }
     }
 
-    /// Which text this is (see [`Text::take_edits`]).
+    /// Which text this is: a new or cloned text gets a new id.
     pub fn id(&self) -> u64 {
         self.id
     }
 
-    /// The edits made since the last call, for a reader that last saw this text (by
-    /// [`Text::id`]) then.
-    pub fn take_edits(&mut self) -> Edits {
-        match self.edits.replace(Vec::new()) {
-            Some(edits) => Edits::Known(edits),
-            None => Edits::Unknown,
+    /// Where the text is in its history (see [`Text::edits_since`]).
+    pub fn revision(&self) -> Revision {
+        Revision {
+            id: self.id,
+            n: self.revision,
         }
+    }
+
+    /// The edits that made this text from what it was at `since`, in order; `None` when that
+    /// isn't known (another text, or edits too long ago): the reader starts over.
+    pub fn edits_since(
+        &self,
+        since: Revision,
+    ) -> Option<std::collections::vec_deque::Iter<'_, LoggedEdit>> {
+        let first = self.revision - self.edits.len() as u64;
+        if since.id != self.id || since.n < first || since.n > self.revision {
+            return None;
+        }
+        Some(self.edits.range((since.n - first) as usize..))
     }
 
     /// Where char index `idx` is, as a byte offset and a byte point.
@@ -227,32 +252,40 @@ impl Text {
     pub fn apply(&mut self, edit: &Edit) -> Edit {
         let end = edit.at + edit.delete;
         let removed = self.rope.slice(edit.at..end).to_string();
-        let logged = self.edits.is_some();
-        let before = logged.then(|| (self.byte_point(edit.at), self.byte_point(end)));
+        let ((start_byte, start), (old_end_byte, old_end)) =
+            (self.byte_point(edit.at), self.byte_point(end));
         self.rope.remove(edit.at..end);
         self.rope.insert(edit.at, &edit.insert);
         self.no_lines = false;
-        if let Some(((start_byte, start), (old_end_byte, old_end))) = before {
-            let (new_end_byte, new_end) = self.byte_point(edit.at + edit.insert.chars().count());
-            let log = self.edits.as_mut().expect("logged");
-            if log.len() < MAX_LOGGED_EDITS {
-                log.push(ByteEdit {
-                    start_byte,
-                    old_end_byte,
-                    new_end_byte,
-                    start,
-                    old_end,
-                    new_end,
-                });
-            } else {
-                self.edits = None;
-            }
+        let (new_end_byte, new_end) = self.byte_point(edit.at + edit.insert.chars().count());
+        if self.edits.len() == MAX_LOGGED_EDITS {
+            self.edits.pop_front();
         }
+        self.edits.push_back(LoggedEdit {
+            bytes: ByteEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte,
+                start,
+                old_end,
+                new_end,
+            },
+            text: edit.insert.clone(),
+        });
+        self.revision += 1;
         Edit {
             at: edit.at,
             delete: edit.insert.chars().count(),
             insert: removed,
         }
+    }
+
+    /// The whole text as a language server is sent it: lines ending in `\n`, the last one
+    /// too (Neovim's `_buf_get_full_text`).
+    pub fn to_lsp_text(&self) -> String {
+        let mut s = self.rope.to_string();
+        s.push('\n');
+        s
     }
 
     /// The file contents to write: every line terminated (Vim's 'fixendofline'), in the file's
@@ -308,11 +341,11 @@ mod tests {
     #[test]
     fn edits_are_logged_in_bytes() {
         let mut text = Text::new("héllo\nwörld\n");
-        assert_eq!(text.take_edits(), Edits::Known(vec![]));
+        let r0 = text.revision();
+        assert_eq!(text.edits_since(r0).unwrap().count(), 0);
         text.apply(&Edit::replace(8..9, "OO\nx"));
-        let Edits::Known(edits) = text.take_edits() else {
-            panic!("known");
-        };
+        let edits: Vec<ByteEdit> = text.edits_since(r0).unwrap().map(|e| e.bytes).collect();
+        assert_eq!(text.edits_since(r0).unwrap().next().unwrap().text, "OO\nx");
         assert_eq!(
             edits,
             [ByteEdit {
@@ -324,14 +357,17 @@ mod tests {
                 new_end: BytePoint { row: 2, col: 1 },
             }]
         );
-        assert_eq!(text.take_edits(), Edits::Known(vec![]));
+        // Each reader follows at its own pace.
+        let r1 = text.revision();
+        assert_eq!(text.edits_since(r1).unwrap().count(), 0);
+        assert_eq!(text.edits_since(r0).unwrap().count(), 1);
         let copy = text.clone();
-        assert_ne!(copy.id(), text.id());
-        for _ in 0..=MAX_LOGGED_EDITS {
+        assert!(copy.edits_since(r1).is_none());
+        for _ in 0..MAX_LOGGED_EDITS {
             text.apply(&Edit::insert(0, "a"));
         }
-        assert_eq!(text.take_edits(), Edits::Unknown);
-        assert_eq!(text.take_edits(), Edits::Known(vec![]));
+        assert!(text.edits_since(r0).is_none());
+        assert_eq!(text.edits_since(r1).unwrap().count(), MAX_LOGGED_EDITS);
     }
 
     #[test]

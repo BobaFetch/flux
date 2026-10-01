@@ -1,5 +1,6 @@
 //! The `flux` binary: terminal setup and the event loop.
 
+mod servers;
 mod terminal;
 
 use std::io::{self, BufWriter, Write};
@@ -42,6 +43,22 @@ fn main() -> Result<()> {
     // Neovim turns on 'termguicolors' when the terminal says it has 24-bit color.
     editor.options.termguicolors =
         std::env::var("COLORTERM").is_ok_and(|v| matches!(v.as_str(), "truecolor" | "24bit"));
+    // The language servers flux knows that are installed start for their filetypes (in Neovim,
+    // the configs given to `vim.lsp.enable`).
+    // `$FLUX_LSP_CONFIG` names a JSON list of configs to use instead (for testing, until
+    // configs can be set in Lua).
+    editor.lsp.enabled = match std::env::var_os("FLUX_LSP_CONFIG") {
+        Some(path) => flux_lsp::config::from_json_file(std::path::Path::new(&path))
+            .map_err(anyhow::Error::msg)?,
+        None => flux_lsp::builtin_configs()
+            .into_iter()
+            .filter(|c| {
+                c.cmd
+                    .first()
+                    .is_some_and(|p| flux_lsp::config::executable(p))
+            })
+            .collect(),
+    };
     editor.open_args(&files);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -58,6 +75,7 @@ async fn run(mut editor: Editor) -> Result<()> {
     // Batches whatever events are already waiting (a paste, key repeat) so they are all handled
     // before the next redraw.
     let mut events = EventStream::new().ready_chunks(256);
+    let (mut servers, mut server_events) = servers::Servers::new();
     let mut cursor_mode = None;
     // The last frame drawn, and the hit-enter screen while it's up: like Vim, a message that
     // needs a prompt is drawn over the screen as it was, without redrawing the text first.
@@ -126,14 +144,20 @@ async fn run(mut editor: Editor) -> Result<()> {
         renderer.draw(&mut out, &grid, cursor)?;
         last_grid = Some(grid);
 
-        let batch = if parsing {
-            match tokio::time::timeout(Duration::ZERO, events.next()).await {
-                Ok(batch) => batch,
-                // No key yet: parse some more.
-                Err(_) => continue,
+        servers.flush(&mut editor);
+        let batch = tokio::select! {
+            biased;
+            batch = events.next() => batch,
+            Some(event) = server_events.recv() => {
+                servers.handle(event, &mut editor, &mut engine);
+                // Take whatever else arrived before redrawing.
+                while let Ok(event) = server_events.try_recv() {
+                    servers.handle(event, &mut editor, &mut engine);
+                }
+                continue;
             }
-        } else {
-            events.next().await
+            // No key yet: parse some more.
+            () = std::future::ready(()), if parsing => continue,
         };
         let Some(batch) = batch else {
             break;
@@ -148,6 +172,9 @@ async fn run(mut editor: Editor) -> Result<()> {
             break;
         }
     }
+    servers
+        .shutdown(&mut editor, &mut engine, &mut server_events)
+        .await;
     out.flush()?;
     Ok(())
 }
