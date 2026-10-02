@@ -433,6 +433,8 @@ Verified:
    those servers are installed.
 
 Known gaps:
+- Diagnostic signs currently expose only a red `E`/`W` and status counts by default; improve the
+  default diagnostic detail and make the severity, message, code and source easier to discover.
 - Floats can't be focused (`KK` doesn't enter the hover window; `CTRL-S` twice doesn't cycle
   signatures in it).
 - Progress (`$/progress`) isn't shown, as in Neovim 0.12 by default.
@@ -446,3 +448,8 @@ Known gaps:
   each, so a fast typist can briefly see states Neovim never draws.
 
 ## M7: Picker, Lua config, clipboard
+
+- Add TOML configuration for static editor preferences and the planned Lua API for programmable
+  configuration such as behavior, commands and keymaps.
+- Make LSP completion optionally automatic while typing, like VS Code or Zed, while preserving
+  explicit Vim-style `CTRL-X CTRL-O` completion.

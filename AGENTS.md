@@ -1,0 +1,31 @@
+# Repository Guide
+
+## Commands
+
+- The workspace is pinned to Rust 1.98.0. `cargo run -- path/to/file` runs the editor because `crates/flux` is the only default member.
+- Do not use plain `cargo test` as the full check; it covers only the default binary. Run `cargo test --workspace`.
+- Reproduce CI in this order: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`.
+- Focus a crate or unit test with `cargo test -p <crate>` or `cargo test -p <crate> <test-name>`.
+- The Neovim behavior suite is `cargo test -p flux-vim --test oracle`. It replays all cases through flux against committed results; it does not invoke Neovim.
+- The indent corpus is `cargo test -p flux-vim --test indent`; set `FLUX_INDENT=<filename-substring>` to narrow it.
+
+## Architecture
+
+- Keep `flux-core` free of IO: it owns rope text, positions, editing history, patterns, and screen-line layout.
+- `flux-view` owns editor state (buffers, windows, options, highlights, and protocol-level LSP state); `flux-vim` turns keys and Ex commands into state changes and performs file IO only for Ex operations.
+- `flux-syntax` owns filetype detection plus incremental tree-sitter parsing/highlighting. Its queries under `crates/flux-syntax/queries/` are compiled in with `include_str!`.
+- `flux-tui` converts editor state into a cell grid and incrementally renders it. Terminal setup, event-loop orchestration, and the executable entrypoint belong in `crates/flux`.
+- Keep LSP responsibilities split: process/config/JSON-RPC transport in `flux-lsp`, editor protocol state in `flux-view::lsp`, message semantics and commands in `flux-vim::lsp`, and process-to-editor wiring in `crates/flux/src/servers.rs`.
+
+## Neovim Fixtures
+
+- Vim-compatible behavior is checked against Neovim 0.12.5. The pinned version is recorded in `crates/flux-vim/tests/oracle/NVIM_VERSION` and CI; `NVIM_BIN` can select another executable for local xtasks.
+- Treat `crates/flux-vim/tests/oracle/expected.json`, `crates/flux-vim/tests/indent/expected/`, and `crates/flux-view/src/colors.json` as generated snapshots. Regenerate them with `cargo xtask oracle gen`, `cargo xtask indent gen`, or `cargo xtask colors gen`, then inspect the diff.
+- Validate generated snapshots against an installed Neovim with the corresponding `cargo xtask <oracle|indent|colors> check` command.
+- Oracle cases above the `MILESTONE` constant in `crates/flux-vim/tests/oracle.rs` are silently skipped; update that gate deliberately when landing a milestone.
+- `cargo xtask screens [filter]` compares flux and Neovim cell-by-cell in both truecolor and 16-color modes. It requires `tmux`, Neovim, and a C compiler, and builds reusable parser artifacts under `target/`.
+
+## Constraints
+
+- Workspace lints forbid unsafe code and CI promotes every warning to an error. `dbg!`, stdout printing, and stderr printing are workspace warnings unless narrowly allowed.
+- New dependencies must use explicit versions and pass the permissive-only license/source policy in `deny.toml`; copyleft licenses, wildcard registry dependencies, unknown registries, and unknown git sources are rejected.
