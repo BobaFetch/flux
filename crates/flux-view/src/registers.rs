@@ -23,6 +23,21 @@ impl Register {
             kind,
         }
     }
+
+    /// The text as the system clipboard holds it: a linewise register's lines
+    /// with their trailing newline (`:registers` shows the same form).
+    pub fn clipboard_text(&self) -> String {
+        if self.kind == RegisterKind::Line {
+            format!("{}\n", self.text)
+        } else {
+            self.text.clone()
+        }
+    }
+}
+
+/// The registers synced with the system clipboard.
+pub fn is_clipboard_name(c: char) -> bool {
+    matches!(c, '+' | '*')
 }
 
 #[derive(Debug)]
@@ -30,6 +45,9 @@ pub struct Registers {
     contents: HashMap<char, Register>,
     /// The register `""` currently refers to: the last one written.
     unnamed: char,
+    /// The last text written to `+`/`*`, waiting for the binary to copy it to
+    /// the system clipboard (the engine does no IO itself).
+    outbound: Option<Register>,
 }
 
 impl Default for Registers {
@@ -37,6 +55,7 @@ impl Default for Registers {
         Self {
             contents: HashMap::new(),
             unnamed: '0',
+            outbound: None,
         }
     }
 }
@@ -112,6 +131,29 @@ impl Registers {
             return;
         }
         self.set(lower, reg);
+        // One system clipboard: `+` and `*` mirror each other (as in Neovim
+        // with a single clipboard provider), and the write waits for the
+        // binary to copy it out.
+        if is_clipboard_name(lower) {
+            let stored = self.contents.get(&lower).expect("just set").clone();
+            let mirror = if lower == '+' { '*' } else { '+' };
+            self.contents.insert(mirror, stored.clone());
+            self.outbound = Some(stored);
+        }
+    }
+
+    /// Text copied outside flux: both clipboard mirrors hold it, charwise.
+    /// This is an inbound sync, so it neither queues an outbound write (no
+    /// echo) nor changes what `""` refers to.
+    pub fn set_external(&mut self, text: String) {
+        let reg = Register::new(text, RegisterKind::Char);
+        self.contents.insert('+', reg.clone());
+        self.contents.insert('*', reg);
+    }
+
+    /// Take the text waiting for the system clipboard, if any.
+    pub fn take_outbound(&mut self) -> Option<Register> {
+        self.outbound.take()
     }
 
     /// Set a read-only register (`".`, `":`), which doesn't change what `""` refers to.
@@ -169,5 +211,42 @@ mod tests {
         assert_eq!(r.get(None).unwrap().text, "foobar\nline");
         r.delete(Some('_'), chars("gone"), false);
         assert_eq!(r.get(None).unwrap().text, "foobar\nline");
+    }
+
+    #[test]
+    fn clipboard_registers_mirror_and_queue_outbound() {
+        let mut r = Registers::default();
+        r.yank(Some('+'), chars("y"));
+        assert_eq!(r.get(Some('+')).unwrap().text, "y");
+        assert_eq!(r.get(Some('*')).unwrap().text, "y");
+        assert_eq!(r.get(None).unwrap().text, "y");
+        assert_eq!(
+            r.take_outbound().unwrap(),
+            Register::new("y", RegisterKind::Char)
+        );
+        assert_eq!(r.take_outbound(), None);
+
+        r.delete(Some('*'), Register::new("d", RegisterKind::Line), false);
+        assert_eq!(r.get(Some('+')).unwrap().text, "d");
+        assert_eq!(r.get(Some('*')).unwrap().text, "d");
+        let out = r.take_outbound().unwrap();
+        assert_eq!(out.kind, RegisterKind::Line);
+        assert_eq!(out.clipboard_text(), "d\n");
+        assert_eq!(chars("c").clipboard_text(), "c");
+    }
+
+    #[test]
+    fn external_clipboard_sync_has_no_echo() {
+        let mut r = Registers::default();
+        r.yank(None, chars("inner"));
+        r.set_external("outer".to_string());
+        assert_eq!(r.get(Some('+')).unwrap().text, "outer");
+        assert_eq!(r.get(Some('*')).unwrap().text, "outer");
+        // Neither an outbound write nor a change to `""`.
+        assert_eq!(r.take_outbound(), None);
+        assert_eq!(r.get(None).unwrap().text, "inner");
+        // Plain registers never queue outbound writes.
+        r.yank(Some('a'), chars("a"));
+        assert_eq!(r.take_outbound(), None);
     }
 }

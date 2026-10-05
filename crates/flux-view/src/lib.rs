@@ -9,8 +9,10 @@ pub mod highlight;
 pub mod layout;
 pub mod lsp;
 pub mod marks;
+pub mod matcher;
 pub mod matchparen;
 pub mod options;
+pub mod picker;
 pub mod pum;
 pub mod quickfix;
 pub mod registers;
@@ -24,5 +26,6 @@ pub use editor::{
 };
 pub use layout::{Dir, Layout, LayoutTree, Rect, WindowId};
 pub use marks::{Jump, JumpList, LineShift, Marks};
+pub use picker::{Picker, PickerEntry, PickerKind, PickerValue, Wildmenu};
 pub use registers::{Register, RegisterKind, Registers};
 pub use window::{Cursor, Metrics, Window};

@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use flux_view::Editor;
+use flux_view::{Editor, Mode};
 
 use crate::engine::Engine;
 use crate::ex_lines;
@@ -156,6 +156,8 @@ const COMMANDS: &[Command] = &[
     cmd("ls", 2, list_buffers),
     cmd("buffers", 7, list_buffers),
     cmd("files", 5, list_buffers),
+    cmd("Files", 2, files_picker),
+    cmd("Buffers", 2, buffers_picker),
     cmd("filetype", 5, filetype),
     cmd("syntax", 2, syntax),
     cmd("lsp", 3, |editor, a| {
@@ -440,6 +442,199 @@ fn find_command(name: &str) -> Option<Command> {
         .iter()
         .find(|c| key.len() >= c.min_len && c.name.starts_with(key))
         .copied()
+}
+
+/// Every Ex command name, for command-line completion.
+pub(crate) fn command_names() -> Vec<&'static str> {
+    COMMANDS.iter().map(|c| c.name).collect()
+}
+
+/// What `<Tab>` completes on the `:` command line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CompleteKind {
+    Command,
+    File,
+    Buffer,
+    Option,
+    Register,
+    Lsp,
+}
+
+/// A completion target: what kind, the word being completed, and the char span
+/// the match replaces.
+pub(crate) struct CompletionTarget {
+    pub kind: CompleteKind,
+    pub prefix: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Byte index where the command name starts: past modifiers, ranges, and
+/// blanks. A pure scanner, so Tab completion never disturbs editor state the
+/// way `parse_range` (cursor moves, search state) would.
+fn command_start(line: &str) -> usize {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    // Modifiers, as in `run`.
+    loop {
+        let rest = &line[i..];
+        if let Some(after) = strip_modifier(rest, "vertical", 4) {
+            i = line.len() - after.len();
+        } else if let Some(after) = strip_modifier(rest, "botright", 2) {
+            i = line.len() - after.len();
+        } else {
+            break;
+        }
+    }
+    // Advance over one char (marks and `\x` escapes may be multibyte).
+    let char_len = |i: usize| line[i..].chars().next().map_or(1, |c| c.len_utf8());
+    loop {
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let c = bytes[i] as char;
+        if c.is_ascii_digit() {
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            i = skip_offset(i, bytes);
+        } else if matches!(c, '.' | '$' | '%' | '*') {
+            i += 1;
+            i = skip_offset(i, bytes);
+        } else if c == '\'' {
+            i += char_len(i);
+            if i < bytes.len() {
+                i += char_len(i);
+            }
+            i = skip_offset(i, bytes);
+        } else if c == '/' || c == '?' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != c as u8 {
+                if bytes[i] == b'\\' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            i = (i + 1).min(bytes.len());
+            i = skip_offset(i, bytes);
+        } else if c == '\\' {
+            i += char_len(i);
+            if i < bytes.len() {
+                i += char_len(i);
+            }
+        } else if c == '+' || c == '-' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        } else if c == ',' || c == ';' {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    i
+}
+
+/// `+N`/`-N` address offsets after an address atom.
+fn skip_offset(mut i: usize, bytes: &[u8]) -> usize {
+    while i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    i
+}
+
+/// The completion target for `line` with the cursor at char index `pos`
+/// (`None` when Tab has nothing to complete). Pure: safe to call on every Tab.
+pub(crate) fn completion_target(line: &str, pos: usize) -> Option<CompletionTarget> {
+    let chars: Vec<char> = line.chars().collect();
+    let pos = pos.min(chars.len());
+    let start_byte = command_start(line);
+    let (name, _) = split_command_name(&line[start_byte..]);
+    let char_at = |b: usize| line[..b].chars().count();
+    let name_start = char_at(start_byte);
+    let name_end = char_at(start_byte + name.len());
+    let mut word_start = pos;
+    while word_start > 0 && !chars[word_start - 1].is_whitespace() {
+        word_start -= 1;
+    }
+    let mut word_end = pos;
+    while word_end < chars.len() && !chars[word_end].is_whitespace() {
+        word_end += 1;
+    }
+    // The cursor is in the command word when it is inside the parsed name span, even
+    // when a range abuts it (`:%s`, `:1,5s`) rather than whitespace. With no name
+    // yet, a cursor inside range text has no command to complete; blanks before
+    // the name still complete it.
+    let completing_command = if name.is_empty() {
+        if pos < name_start && !line[..start_byte].trim().is_empty() {
+            return None;
+        }
+        true
+    } else {
+        pos >= name_start && pos <= name_end
+    };
+    if completing_command {
+        // Still in the command word (or nothing typed): complete the command.
+        // The replacement covers the name only, so `:w!` keeps its bang.
+        let end = pos.clamp(name_start, name_end);
+        return Some(CompletionTarget {
+            kind: CompleteKind::Command,
+            prefix: chars[name_start..end].iter().collect(),
+            start: name_start,
+            end: name_end,
+        });
+    }
+    let cmd = find_command(name)?;
+    // The first argument word (past the name, an optional `!`, and blanks).
+    let mut first = name_end;
+    if chars.get(first) == Some(&'!') {
+        first += 1;
+    }
+    while first < chars.len() && chars[first].is_whitespace() {
+        first += 1;
+    }
+    // An attached bang (`:w!file`) is part of the whitespace word; completion
+    // starts after it.
+    if first <= pos && word_start < first {
+        word_start = first;
+    }
+    let first_word = word_start == first;
+    let kind = match cmd.name {
+        "edit" | "write" | "split" | "vsplit" | "new" | "vnew" | "Explore" | "Sexplore"
+        | "Vexplore" => CompleteKind::File,
+        "buffer" | "bnext" | "bNext" | "bprevious" | "bfirst" | "brewind" | "blast" | "bdelete"
+        | "bwipeout" => CompleteKind::Buffer,
+        "set" | "setlocal" | "setglobal" => CompleteKind::Option,
+        "registers" | "display" => CompleteKind::Register,
+        "delete" | "yank" | "put" if first_word => CompleteKind::Register,
+        "lsp" if first_word => CompleteKind::Lsp,
+        _ => return None,
+    };
+    let prefix: String = chars[word_start..pos].iter().collect();
+    // After `:delete`/`:yank`/`:put` a leading digit is a count, not a register.
+    // `:registers` takes register names (digits included) in every position.
+    if matches!(kind, CompleteKind::Register)
+        && matches!(cmd.name, "delete" | "yank" | "put")
+        && prefix.chars().next().is_some_and(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(CompletionTarget {
+        kind,
+        prefix,
+        start: word_start,
+        end: word_end,
+    })
 }
 
 /// A parsed range: its two lines (1-based; may be out of range, checked by the caller), how
@@ -1246,6 +1441,36 @@ fn list_buffers(editor: &mut Editor, a: &Args) {
     show_list(editor, command, lines);
 }
 
+/// `:Files [query]`: fuzzy file picker over the working directory.
+fn files_picker(editor: &mut Editor, a: &Args) {
+    let paths = flux_view::explorer::walk_files(&editor.cwd, 5000);
+    let mut picker = flux_view::Picker::files(paths);
+    picker.set_query(a.args.trim());
+    editor.wildmenu = None;
+    editor.picker = Some(picker);
+    editor.cmdline_kind = ':';
+    editor.mode = Mode::CmdLine;
+}
+
+/// `:Buffers [query]`: fuzzy picker over listed buffers.
+fn buffers_picker(editor: &mut Editor, a: &Args) {
+    let entries: Vec<flux_view::PickerEntry> = editor
+        .buffers
+        .iter()
+        .filter(|b| b.listed && !b.directory)
+        .map(|b| flux_view::PickerEntry {
+            text: format!("{}: {}", b.id.0, b.name()),
+            value: flux_view::PickerValue::Buffer(b.id),
+        })
+        .collect();
+    let mut picker = flux_view::Picker::new(flux_view::PickerKind::Buffers, entries);
+    picker.set_query(a.args.trim());
+    editor.wildmenu = None;
+    editor.picker = Some(picker);
+    editor.cmdline_kind = ':';
+    editor.mode = Mode::CmdLine;
+}
+
 fn checktime(editor: &mut Editor, a: &Args) {
     let args = a.args;
     if no_args(editor, args) {
@@ -1313,7 +1538,7 @@ fn registers(editor: &mut Editor, a: &Args) {
     let args = a.args;
     let width = editor.screen_size().0.max(20);
     let mut lines = vec!["Type Name Content".to_string()];
-    for name in "\"0123456789abcdefghijklmnopqrstuvwxyz-.:%".chars() {
+    for name in "\"0123456789abcdefghijklmnopqrstuvwxyz-*+.:%".chars() {
         if !args.is_empty() && !args.contains(name) {
             continue;
         }
@@ -1603,5 +1828,53 @@ mod tests {
         execute(&mut editor, "checktime");
         assert!(message(&editor).starts_with("W12"));
         assert_eq!(editor.text().line_str(0), "wo");
+    }
+
+    #[test]
+    fn tab_completion_targets_commands_after_ranges() {
+        let target = completion_target("%s", 2).unwrap();
+        assert_eq!(target.kind, CompleteKind::Command);
+        assert_eq!(target.prefix, "s");
+        assert_eq!((target.start, target.end), (1, 2));
+
+        let target = completion_target("1,5s", 4).unwrap();
+        assert_eq!(target.kind, CompleteKind::Command);
+        assert_eq!(target.prefix, "s");
+        assert_eq!((target.start, target.end), (3, 4));
+
+        // Inside range text there is no command to complete; blanks still count.
+        assert!(completion_target("1,5", 1).is_none());
+        let target = completion_target("  ", 0).unwrap();
+        assert_eq!(target.kind, CompleteKind::Command);
+        assert_eq!(target.prefix, "");
+        assert_eq!((target.start, target.end), (2, 2));
+    }
+
+    #[test]
+    fn tab_completion_targets_register_arguments() {
+        let target = completion_target("reg a b", 7).unwrap();
+        assert_eq!(target.kind, CompleteKind::Register);
+        assert_eq!(target.prefix, "b");
+        assert_eq!((target.start, target.end), (6, 7));
+
+        let target = completion_target("reg 1", 5).unwrap();
+        assert_eq!(target.kind, CompleteKind::Register);
+        assert_eq!(target.prefix, "1");
+
+        // But after `:delete` a digit is a count, so Tab has nothing to do.
+        assert!(completion_target("d 3", 3).is_none());
+    }
+
+    #[test]
+    fn tab_completion_starts_after_attached_bang() {
+        let target = completion_target("w!file", 6).unwrap();
+        assert_eq!(target.kind, CompleteKind::File);
+        assert_eq!(target.prefix, "file");
+        assert_eq!((target.start, target.end), (2, 6));
+
+        let target = completion_target("d!a", 3).unwrap();
+        assert_eq!(target.kind, CompleteKind::Register);
+        assert_eq!(target.prefix, "a");
+        assert_eq!((target.start, target.end), (2, 3));
     }
 }

@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::grid::{Grid, Style};
 use crate::theme::Theme;
 
+mod picker;
 mod pum;
 
 /// Draw `editor` into `grid`, returning where the terminal cursor should go. `showcmd` is a
@@ -43,8 +44,12 @@ pub fn draw(editor: &Editor, showcmd: &str, grid: &mut Grid) -> Option<(usize, u
         draw_float(editor, &theme, float, grid);
     }
     pum::draw(editor, &theme, grid);
+    let picker_cursor = picker::draw_picker(editor, &theme, grid);
     if let Some(pos) = draw_cmdline(editor, &theme, grid, height - 1) {
         cursor = Some(pos);
+    }
+    if picker_cursor.is_some() {
+        cursor = picker_cursor;
     }
     if editor.hit_enter
         && let Some(pos) = hit_enter(editor, &theme, grid)
@@ -997,6 +1002,9 @@ fn draw_cmdline(
             }
             for (row, piece) in (first..).zip(flux_view::editor::wrap(&line, width)) {
                 grid.put_str(0, row, &piece, Style::default());
+            }
+            if first > 0 {
+                picker::draw_wildmenu(editor, theme, grid, first - 1);
             }
             let before: String = line
                 .chars()

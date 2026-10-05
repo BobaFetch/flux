@@ -112,6 +112,10 @@ pub struct Editor {
     pub cmdline_pos: usize,
     /// The mode the command line returns to (Visual for a search typed in Visual mode).
     pub cmdline_return: Mode,
+    /// The `:Files`/`:Buffers` picker, open over `Mode::CmdLine`.
+    pub picker: Option<crate::picker::Picker>,
+    /// `<Tab>` cycling state on the `:` command line.
+    pub wildmenu: Option<crate::picker::Wildmenu>,
     /// 'incsearch' while typing a search: the match to show, and the pattern typed so far
     /// (highlighted instead of the last search pattern).
     pub incsearch: Option<(Cursor, Cursor)>,
@@ -227,6 +231,8 @@ impl Editor {
             cmdline_prompt: String::new(),
             cmdline_pos: 0,
             cmdline_return: Mode::Normal,
+            picker: None,
+            wildmenu: None,
             incsearch: None,
             incsearch_pattern: None,
             preview: None,

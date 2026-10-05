@@ -1,5 +1,6 @@
 //! The `flux` binary: terminal setup and the event loop.
 
+mod clipboard;
 mod servers;
 mod terminal;
 
@@ -8,9 +9,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use clipboard::Clipboard;
 use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{Event, EventStream, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::queue;
+use crossterm::style::Print;
 use flux_tui::{Grid, Renderer};
 use flux_view::{Editor, Mode};
 use flux_vim::{Engine, Key, KeyCode, Modifiers};
@@ -80,6 +83,13 @@ async fn run(mut editor: Editor) -> Result<()> {
     // before the next redraw.
     let mut events = EventStream::new().ready_chunks(256);
     let (mut servers, mut server_events) = servers::Servers::new();
+    // The system clipboard behind `+`/`*`, primed once so a put works first thing.
+    let clipboard = Clipboard::probe();
+    if let Some(text) = clipboard.read() {
+        editor.registers.set_external(text);
+    }
+    // The last key was a bare `"` naming a register in Normal/Visual mode.
+    let mut clip_quote = false;
     let mut cursor_mode = None;
     // The last frame drawn, and the hit-enter screen while it's up: like Vim, a message that
     // needs a prompt is drawn over the screen as it was, without redrawing the text first.
@@ -92,11 +102,21 @@ async fn run(mut editor: Editor) -> Result<()> {
     loop {
         if editor.lsp.waiting.is_none() && !held.is_empty() {
             while let Some(event) = held.pop_front() {
-                handle_event(event, &mut editor, &mut engine, &mut renderer);
+                handle_event(
+                    event,
+                    &mut editor,
+                    &mut engine,
+                    &mut renderer,
+                    &clipboard,
+                    &mut clip_quote,
+                );
                 if editor.quit || editor.lsp.waiting.is_some() {
                     break;
                 }
             }
+            // Drained before the quit check: a yank-then-quit must still reach
+            // the clipboard.
+            drain_clipboard(&mut out, &mut editor, &clipboard)?;
             if editor.quit {
                 break;
             }
@@ -198,6 +218,8 @@ async fn run(mut editor: Editor) -> Result<()> {
             () = async { tokio::time::sleep_until(wake.expect("checked")).await }, if wake.is_some() => continue,
         };
         let Some(batch) = batch else {
+            // stdin closed: still deliver a pending clipboard write.
+            drain_clipboard(&mut out, &mut editor, &clipboard)?;
             break;
         };
         for event in batch {
@@ -206,11 +228,21 @@ async fn run(mut editor: Editor) -> Result<()> {
                 held.push_back(event);
                 continue;
             }
-            handle_event(event, &mut editor, &mut engine, &mut renderer);
+            handle_event(
+                event,
+                &mut editor,
+                &mut engine,
+                &mut renderer,
+                &clipboard,
+                &mut clip_quote,
+            );
             if editor.quit {
                 break;
             }
         }
+        // Drained before the quit check: a yank-then-quit must still reach
+        // the clipboard.
+        drain_clipboard(&mut out, &mut editor, &clipboard)?;
         if editor.quit {
             break;
         }
@@ -222,13 +254,51 @@ async fn run(mut editor: Editor) -> Result<()> {
     Ok(())
 }
 
-fn handle_event(event: Event, editor: &mut Editor, engine: &mut Engine, renderer: &mut Renderer) {
+/// Copy a yanked `+`/`*` write to the system clipboard (or record it for the
+/// fake override).
+fn drain_clipboard(
+    out: &mut impl Write,
+    editor: &mut Editor,
+    clipboard: &Clipboard,
+) -> io::Result<()> {
+    if let Some(reg) = editor.registers.take_outbound() {
+        let text = reg.clipboard_text();
+        // Under the fake override the write is recorded for tests; otherwise
+        // it goes out as OSC 52 for the terminal to deliver.
+        if !clipboard.fake_write(&text) {
+            queue!(out, Print(Clipboard::osc52(&text)))?;
+        }
+    }
+    Ok(())
+}
+
+fn handle_event(
+    event: Event,
+    editor: &mut Editor,
+    engine: &mut Engine,
+    renderer: &mut Renderer,
+    clipboard: &Clipboard,
+    clip_quote: &mut bool,
+) {
     match event {
         Event::Key(key) => {
             if let Some(key) = convert_key(key) {
                 if key == Key::ctrl('l') {
                     renderer.invalidate();
                 }
+                // A `"` naming `+`/`*`: sync the mirrors from the system
+                // clipboard before the engine reads them (this also covers
+                // terminals without focus events).
+                let typed = key.typed_char();
+                let naming = matches!(editor.mode, Mode::Normal | Mode::Visual);
+                if *clip_quote
+                    && naming
+                    && matches!(typed, Some('+' | '*'))
+                    && let Some(text) = clipboard.read()
+                {
+                    editor.registers.set_external(text);
+                }
+                *clip_quote = naming && typed == Some('"');
                 engine.handle_key(editor, key);
             }
         }
@@ -236,8 +306,13 @@ fn handle_event(event: Event, editor: &mut Editor, engine: &mut Engine, renderer
             editor.resize(width.into(), height.into());
             renderer.invalidate();
         }
-        // Like Neovim's 'autoread': notice files changed by other programs.
-        Event::FocusGained => editor.check_time(),
+        Event::FocusGained => {
+            if let Some(text) = clipboard.read() {
+                editor.registers.set_external(text);
+            }
+            // Like Neovim's 'autoread': notice files changed by other programs.
+            editor.check_time();
+        }
         _ => {}
     }
 }

@@ -706,6 +706,11 @@ impl Engine {
     }
 
     pub(crate) fn cmdline_edit(&mut self, editor: &mut Editor, key: Key) {
+        // A picker rides the command line: it takes all keys until Enter/Esc.
+        if editor.picker.is_some() {
+            self.picker_key(editor, key);
+            return;
+        }
         if std::mem::take(&mut self.cmdline_register) {
             if let Some(name) = key.typed_char()
                 && let Some(reg) = editor.register(Some(name))
@@ -720,6 +725,10 @@ impl Engine {
                 insert_at_cursor(editor, &c.to_string());
             }
             return;
+        }
+        // Any key but Tab closes the wildmenu (its text stays as typed).
+        if !matches!(key.code, KeyCode::Tab) {
+            editor.wildmenu = None;
         }
         let pos = editor.cmdline_pos.min(editor.cmdline.chars().count());
         let len = editor.cmdline.chars().count();
@@ -801,7 +810,22 @@ impl Engine {
             (KeyCode::PageDown, _) => self.browse_history(editor, false, false),
             (KeyCode::Char('p'), Modifiers::CTRL) => self.browse_history(editor, true, false),
             (KeyCode::Char('n'), Modifiers::CTRL) => self.browse_history(editor, false, false),
-            (KeyCode::Tab, m) if m == Modifiers::NONE => insert_at_cursor(editor, "\t"),
+            (KeyCode::Tab, m) if m == Modifiers::NONE => {
+                if editor.cmdline_kind == ':' {
+                    crate::complete::cycle(self, editor, false);
+                } else {
+                    insert_at_cursor(editor, "\t");
+                }
+            }
+            (KeyCode::Tab, m) if m.shift && !m.ctrl && !m.alt && !m.meta => {
+                if editor.cmdline_kind == ':' {
+                    crate::complete::cycle(self, editor, true);
+                } else {
+                    insert_at_cursor(editor, "\t");
+                }
+            }
+            // Other Tab chords (for example CTRL-Tab) stay literal, as before.
+            (KeyCode::Tab, _) => insert_at_cursor(editor, "\t"),
             (KeyCode::Char(c), Modifiers::NONE) => insert_at_cursor(editor, &c.to_string()),
             _ => {}
         }
@@ -818,6 +842,77 @@ impl Engine {
         if editor.cmdline_kind != ':' {
             self.finish_search(editor, None);
         }
+    }
+
+    /// Keys for the `:Files`/`:Buffers` picker: typing filters, `<Up>`/`<Down>`
+    /// (and `<Tab>`/`<S-Tab>`) move the wrapped selection, `<CR>` opens it.
+    fn picker_key(&mut self, editor: &mut Editor, key: Key) {
+        match (key.code, key.mods) {
+            (KeyCode::Enter, _) | (KeyCode::Char('m' | 'j'), Modifiers::CTRL) => {
+                self.confirm_picker(editor);
+                return;
+            }
+            (KeyCode::Esc, _) | (KeyCode::Char('c'), Modifiers::CTRL) => {
+                self.cancel_picker(editor);
+                return;
+            }
+            _ => {}
+        }
+        let Some(picker) = editor.picker.as_mut() else {
+            return;
+        };
+        let pos = picker.pos;
+        match (key.code, key.mods) {
+            (KeyCode::Backspace, _) | (KeyCode::Char('h'), Modifiers::CTRL) => picker.backspace(),
+            (KeyCode::Delete, _) => picker.delete_forwards(),
+            (KeyCode::Char('u'), Modifiers::CTRL) => picker.clear_before(),
+            (KeyCode::Char('w'), Modifiers::CTRL) => picker.delete_word_before(),
+            (KeyCode::Left, m) if m == Modifiers::NONE => picker.move_to(pos.saturating_sub(1)),
+            (KeyCode::Right, m) if m == Modifiers::NONE => picker.move_to(pos + 1),
+            (KeyCode::Left, _) => picker.move_to(word_left(&picker.input, pos)),
+            (KeyCode::Right, _) => picker.move_to(word_right(&picker.input, pos)),
+            (KeyCode::Home, _) | (KeyCode::Char('b'), Modifiers::CTRL) => picker.move_to(0),
+            (KeyCode::End, _) | (KeyCode::Char('e'), Modifiers::CTRL) => picker.move_to(usize::MAX),
+            (KeyCode::Up, _) | (KeyCode::Char('p'), Modifiers::CTRL) => picker.move_sel(-1),
+            (KeyCode::Down, _) | (KeyCode::Char('n'), Modifiers::CTRL) => picker.move_sel(1),
+            (KeyCode::Tab, m) if m == Modifiers::NONE => picker.move_sel(1),
+            (KeyCode::Tab, m) if m.shift && !m.ctrl && !m.alt && !m.meta => picker.move_sel(-1),
+            (KeyCode::Char(c), Modifiers::NONE) => picker.insert(&c.to_string()),
+            _ => {}
+        }
+    }
+
+    /// `<CR>` in a picker: open the selected entry (like `:edit`/`:buffer`).
+    fn confirm_picker(&mut self, editor: &mut Editor) {
+        let Some(picker) = editor.picker.take() else {
+            return;
+        };
+        editor.mode = Mode::Normal;
+        let Some(entry) = picker.selected_entry() else {
+            // Nothing matches: stay put, as if the command had failed.
+            self.failed = true;
+            return;
+        };
+        match &entry.value {
+            flux_view::PickerValue::File(path) => {
+                if let Err(e) = editor.edit_file(path) {
+                    editor.error(e);
+                }
+            }
+            flux_view::PickerValue::Buffer(id) => {
+                if editor.buffers.iter().any(|b| b.id == *id) {
+                    editor.show_buffer(*id);
+                } else {
+                    editor.error(format!("E86: Buffer {} does not exist", id.0));
+                }
+            }
+        }
+    }
+
+    /// `<Esc>` in a picker: close it, changing nothing.
+    fn cancel_picker(&mut self, editor: &mut Editor) {
+        editor.picker = None;
+        editor.mode = Mode::Normal;
     }
 
     /// `<Up>`/`<Down>` (matching the typed prefix) and `<S-Up>`/`CTRL-P`, … on the command
@@ -1190,5 +1285,193 @@ mod tests {
             editor.message.as_ref().unwrap().text,
             "1 change; before #2  0 seconds ago"
         );
+    }
+
+    #[test]
+    fn cmdline_tab_cycles_command_names() {
+        let mut editor = Editor::new(80, 24);
+        let mut engine = Engine::new();
+        feed(&mut editor, &mut engine, ":se<Tab>");
+        assert_eq!(editor.cmdline, "set");
+        let wild = editor.wildmenu.clone().unwrap();
+        assert_eq!(
+            wild.items,
+            ["set", "setglobal", "setlocal"].map(str::to_string)
+        );
+        assert_eq!(wild.selected, Some(0));
+        assert_eq!(wild.original, "se");
+        assert_eq!(wild.start, 0);
+
+        for (keys, cmdline, selected) in [
+            ("<Tab>", "setglobal", Some(1_usize)),
+            ("<Tab>", "setlocal", Some(2_usize)),
+            ("<Tab>", "se", None::<usize>),
+            ("<S-Tab>", "setlocal", Some(2_usize)),
+        ] {
+            feed(&mut editor, &mut engine, keys);
+            assert_eq!(editor.cmdline, cmdline, "{keys}");
+            assert_eq!(
+                editor.wildmenu.as_ref().unwrap().selected,
+                selected,
+                "{keys}"
+            );
+        }
+
+        // Any other key keeps the text and closes the menu.
+        feed(&mut editor, &mut engine, "x");
+        assert_eq!(editor.cmdline, "setlocalx");
+        assert!(editor.wildmenu.is_none());
+
+        // Reverse completion starts from the last match.
+        feed(&mut editor, &mut engine, "<Esc>:se<S-Tab>");
+        assert_eq!(editor.cmdline, "setlocal");
+        assert_eq!(editor.wildmenu.clone().unwrap().selected, Some(2));
+    }
+
+    #[test]
+    fn cmdline_tab_completes_command_after_attached_range() {
+        let mut editor = Editor::new(80, 24);
+        let mut engine = Engine::new();
+        feed(&mut editor, &mut engine, ":%sy<Tab>");
+        assert_eq!(editor.cmdline, "%syntax");
+        assert!(editor.wildmenu.is_none());
+        feed(&mut editor, &mut engine, "<Esc>");
+    }
+
+    #[test]
+    fn cmdline_tab_completes_each_argument_kind() {
+        let dir = temp_tree("tabcomplete");
+        std::fs::write(dir.join("my doc.txt"), "doc\n").unwrap();
+        std::fs::write(dir.join("my other.txt"), "other\n").unwrap();
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&["a.txt".into(), "b.txt".into()]);
+        let mut engine = Engine::new();
+
+        feed(&mut editor, &mut engine, ":e a<Tab>");
+        assert_eq!(editor.cmdline, "e a.txt");
+        assert!(editor.wildmenu.is_none());
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":e!a<Tab>");
+        assert_eq!(editor.cmdline, "e!a.txt");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":e sub<Tab>");
+        assert_eq!(editor.cmdline, "e sub/");
+        feed(&mut editor, &mut engine, "<Tab>");
+        assert_eq!(editor.cmdline, "e sub/c.txt");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":e my<Tab>");
+        assert_eq!(editor.cmdline, "e my doc.txt");
+        feed(&mut editor, &mut engine, "<Tab>");
+        assert_eq!(editor.cmdline, "e my other.txt");
+        feed(&mut editor, &mut engine, "<Tab>");
+        assert_eq!(editor.cmdline, "e my");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":b b<Tab>");
+        assert_eq!(editor.cmdline, "b b.txt");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":set wraps<Tab>");
+        assert_eq!(editor.cmdline, "set wrapscan");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":reg a<Tab>");
+        assert_eq!(editor.cmdline, "reg a");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":reg a b<Tab>");
+        assert_eq!(editor.cmdline, "reg a b");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":reg 1<Tab>");
+        assert_eq!(editor.cmdline, "reg 1");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        // A search still takes a literal tab.
+        feed(&mut editor, &mut engine, "/foo<Tab>");
+        assert_eq!(editor.cmdline, "foo\t");
+        feed(&mut editor, &mut engine, "<S-Tab>");
+        assert_eq!(editor.cmdline, "foo\t\t");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        // No match leaves the text alone and fails the command.
+        feed(&mut editor, &mut engine, ":e zzz-no-such-file<Tab>");
+        assert_eq!(editor.cmdline, "e zzz-no-such-file");
+        assert!(engine.failed);
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pickers_open_files_and_buffers() {
+        let dir = temp_tree("pickerkeys");
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&["a.txt".into()]);
+        editor.edit_file(std::path::Path::new("b.txt")).unwrap();
+        let a = editor.find_buffer(std::path::Path::new("a.txt")).unwrap();
+        editor.show_buffer(a);
+        let mut engine = Engine::new();
+
+        feed(&mut editor, &mut engine, ":Files<CR>");
+        let picker = editor.picker.clone().unwrap();
+        assert_eq!(picker.kind, flux_view::PickerKind::Files);
+        assert_eq!(picker.selected_entry().unwrap().text, "a.txt");
+        feed(&mut editor, &mut engine, "<Down><CR>");
+        assert!(editor.picker.is_none());
+        assert_eq!(editor.mode, Mode::Normal);
+        assert_eq!(editor.current_buffer().name(), "b.txt");
+        assert_eq!(lines(&editor), ["bee"]);
+
+        feed(&mut editor, &mut engine, ":Files b<CR>");
+        let picker = editor.picker.clone().unwrap();
+        assert_eq!(picker.input, "b");
+        assert_eq!(picker.selected_entry().unwrap().text, "b.txt");
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        feed(&mut editor, &mut engine, ":Files<CR>b");
+        let picker = editor.picker.clone().unwrap();
+        assert_eq!(picker.input, "b");
+        assert_eq!(picker.selected_entry().unwrap().text, "b.txt");
+        feed(&mut editor, &mut engine, "<BS>");
+        let picker = editor.picker.clone().unwrap();
+        assert_eq!(picker.input, "");
+        assert_eq!(picker.shown_count(), 3);
+        feed(&mut editor, &mut engine, "<Esc>");
+
+        // Esc leaves the current buffer alone.
+        feed(&mut editor, &mut engine, ":Buffers<CR><Down>");
+        assert_eq!(editor.picker.clone().unwrap().selected, 1);
+        feed(&mut editor, &mut engine, "<Up>");
+        assert_eq!(editor.picker.clone().unwrap().selected, 0);
+        feed(&mut editor, &mut engine, "<Tab>");
+        assert_eq!(editor.picker.clone().unwrap().selected, 1);
+        feed(&mut editor, &mut engine, "<S-Tab>");
+        assert_eq!(editor.picker.clone().unwrap().selected, 0);
+        feed(&mut editor, &mut engine, "<Esc>");
+        assert!(editor.picker.is_none());
+        assert_eq!(editor.current_buffer().name(), "b.txt");
+
+        feed(&mut editor, &mut engine, ":Buffers<CR>");
+        let picker = editor.picker.clone().unwrap();
+        assert_eq!(picker.kind, flux_view::PickerKind::Buffers);
+        assert!(picker.selected_entry().unwrap().text.ends_with(": a.txt"));
+        feed(&mut editor, &mut engine, "<CR>");
+        assert_eq!(editor.current_buffer().name(), "a.txt");
+        assert_eq!(lines(&editor), ["ay"]);
+
+        // Confirming with no match changes nothing and fails the command.
+        feed(&mut editor, &mut engine, ":Files<CR>zzz-no-such-file<CR>");
+        assert!(editor.picker.is_none());
+        assert_eq!(editor.mode, Mode::Normal);
+        assert_eq!(editor.current_buffer().name(), "a.txt");
+        assert!(engine.failed);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

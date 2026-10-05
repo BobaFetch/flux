@@ -34,6 +34,53 @@ pub fn list_dir(dir: &Path) -> io::Result<String> {
     Ok(text)
 }
 
+/// Every file under `dir`: each level's files first (sorted, as in `list_dir`),
+/// then its subdirectories in order. Paths are relative to `dir`. Hidden
+/// entries are skipped, symlinked directories are listed but never descended
+/// into, and unreadable directories are skipped; at most `cap` files. The cap applies
+/// after sorting, so truncation is deterministic.
+pub fn walk_files(dir: &Path, cap: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    walk_into(dir, dir, &mut out, cap);
+    out
+}
+
+fn walk_into(base: &Path, dir: &Path, out: &mut Vec<PathBuf>, cap: usize) {
+    if out.len() >= cap {
+        return;
+    }
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        // `file_type` doesn't follow symlinks: a symlink to a directory lists
+        // as a file and is never descended into, so walks can't loop.
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => dirs.push(name),
+            Ok(t) if t.is_file() || t.is_symlink() => files.push(name),
+            _ => {}
+        }
+    }
+    dirs.sort();
+    files.sort();
+    for name in files {
+        if out.len() >= cap {
+            return;
+        }
+        let full = dir.join(&name);
+        out.push(full.strip_prefix(base).unwrap_or(&full).to_path_buf());
+    }
+    for name in dirs {
+        walk_into(base, &dir.join(&name), out, cap);
+    }
+}
+
 /// `path` taken from `base` (unless already absolute), with `.` and `..` resolved by name,
 /// without following symlinks.
 pub fn absolute(base: &Path, path: &Path) -> PathBuf {
@@ -197,5 +244,27 @@ mod tests {
         let cwd = Path::new("/a/b");
         assert_eq!(short_name(cwd, Path::new("/a/b/c.rs")), Path::new("c.rs"));
         assert_eq!(short_name(cwd, Path::new("/a/x.rs")), Path::new("/a/x.rs"));
+    }
+
+    #[test]
+    fn walk_lists_relative_skips_hidden_and_caps() {
+        let root = std::env::temp_dir().join(format!("flux-walk-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        for name in ["b.rs", "a.rs", ".hidden", "sub/c.rs", "sub/.h"] {
+            std::fs::write(root.join(name), "x").unwrap();
+        }
+        let walked = walk_files(&root, 100);
+        let texts: Vec<String> = walked
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(texts, vec!["a.rs", "b.rs", "sub/c.rs"]);
+        let capped: Vec<String> = walk_files(&root, 2)
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(capped, vec!["a.rs", "b.rs"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

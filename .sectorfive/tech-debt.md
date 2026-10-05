@@ -1,0 +1,6 @@
+# flux — tech debt
+- [HIGH] `cargo xtask oracle gen|check` broken with local nvim: `vim.cmd("set all&")` (xtask/oracle.lua:77) silently ends `-l` scripts (exit 0, no further output) under Homebrew nvim 0.12.5 / LuaJIT 2.1.1788856981 — reproduced unsandboxed; `:set number` fine, `+cmd` mode fine. expected.json (M6) was recorded with a v0.12.5 that behaved differently (other build/platform). Options: different nvim build, or replace `set all&` with explicit per-option resets. Recorded replay (`--test oracle`) still passes. Origin: 2026-10-03 bootstrap. Blocks: live oracle re-verification + future gens on this Mac.
+- [LOW] some_file.js at repo root is unreferenced scratch (manual syntax-highlighting probe?). Remove or move out of the repo. Origin: 2026-10-03 bootstrap.
+- [LOW] flux-lsp is integrated (flux-view, flux binary, xtask depend on it) but missing from the README layout table and [workspace.dependencies]. Doc-only gap. Origin: 2026-10-03 bootstrap.
+- [INFO] `cargo deny check` not verified locally (sandbox blocked advisory DB); rerun outside sandbox. Origin: 2026-10-03 bootstrap.
+- [LOW] `'clipboard'` option (`unnamed`/`unnamedplus` auto-sync) not in M7 scope: only explicit `+`/`*` sync. Origin: 2026-10-03 m7/A1.
