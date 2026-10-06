@@ -22,7 +22,7 @@
 - Vim-compatible behavior is checked against Neovim 0.12.5. The pinned version is recorded in `crates/flux-vim/tests/oracle/NVIM_VERSION` and CI; `NVIM_BIN` can select another executable for local xtasks.
 - Treat `crates/flux-vim/tests/oracle/expected.json`, `crates/flux-vim/tests/indent/expected/`, and `crates/flux-view/src/colors.json` as generated snapshots. Regenerate them with `cargo xtask oracle gen`, `cargo xtask indent gen`, or `cargo xtask colors gen`, then inspect the diff.
 - Validate generated snapshots against an installed Neovim with the corresponding `cargo xtask <oracle|indent|colors> check` command.
-- Oracle cases above the `MILESTONE` constant in `crates/flux-vim/tests/oracle.rs` are silently skipped; update that gate deliberately when landing a milestone.
+- Oracle cases above the `MILESTONE` constant in `crates/flux-vim/tests/oracle.rs` are deferred: they still run and must differ from Neovim (`deferred_cases_still_differ`), so a case that starts matching fails the suite until its `m` tag is lowered. Update `MILESTONE` deliberately when landing a milestone.
 - `cargo xtask screens [filter]` compares flux and Neovim cell-by-cell in both truecolor and 16-color modes. It requires `tmux`, Neovim, and a C compiler, and builds reusable parser artifacts under `target/`.
 
 ## Constraints

@@ -31,7 +31,8 @@ cargo test --workspace                    # all tests (plain `cargo test` covers
 `crates/flux-vim/tests/oracle/cases.json` lists key sequences, each tagged with the milestone
 that implements it. `cargo xtask oracle gen` runs them through `nvim --headless --clean` and
 records the results in `expected.json`; the `oracle` test replays every case up to the current
-milestone through flux and fails on any difference in text, cursor or scroll position.
+milestone through flux and fails on any difference in text, cursor or scroll position. Cases
+tagged for later milestones still run and must differ; `-- --show-output` prints the counts.
 
 ```sh
 cargo test -p flux-vim --test oracle   # flux vs the recorded Neovim results
