@@ -454,3 +454,15 @@ Known gaps:
   configuration such as behavior, commands and keymaps.
 - Make LSP completion optionally automatic while typing, like VS Code or Zed, while preserving
   explicit Vim-style `CTRL-X CTRL-O` completion.
+- `:Files` skips gitignored files inside git repos and `.ignore` matches, and marks a
+  truncated list with `N+`.
+
+### Manual check
+
+1. After `cargo test --workspace` (so `target/` exists), `cargo run -- .`, then
+   `:Files oracle.lua` and Enter. `xtask/oracle.lua` is the selected entry. Clear the
+   query with `CTRL-U`: no `target/` path, and no truncation marker (this tree has 657
+   tracked non-hidden files, equal to `git ls-files | grep -v '^\.' | wc -l`; the spec's
+   "about 646" was an older checkout).
+2. A non-git directory with `big/` (6000 files) and `small/{a,b,c}`, cap 5000. `:Files`
+   shows the marker `5000+`. `:Files small/` matches `small/a`, `small/b`, and `small/c`.
