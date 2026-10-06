@@ -3,7 +3,7 @@
 //! diagnostics they report. Pure state: the binary runs the processes (`flux_lsp`), carries
 //! [`Outgoing`] messages out and brings their messages back in (`flux_vim::lsp`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use flux_core::{Revision, Text};
@@ -197,6 +197,10 @@ pub struct LspState {
     next_group: u64,
     /// The configs that start servers for matching buffers (`:lsp enable`).
     pub enabled: Vec<ServerConfig>,
+    /// Built-ins enabled without a user request; explicit enabling removes the name.
+    pub auto_enabled: HashSet<String>,
+    /// Auto-enabled configs that failed before initialization, in failure order.
+    pub failed: Vec<String>,
     /// Every config known (`vim.lsp.config`), enabled or not.
     pub configs: Vec<ServerConfig>,
     /// A request the editor waits for (Neovim's `request_sync`): the client, the request's id,
