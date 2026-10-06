@@ -50,7 +50,8 @@ fn main() -> Result<()> {
     // the configs given to `vim.lsp.enable`).
     // `$FLUX_LSP_CONFIG` names a JSON list of configs to use instead (for testing, until
     // configs can be set in Lua).
-    editor.lsp.configs = match std::env::var_os("FLUX_LSP_CONFIG") {
+    let user_configs = std::env::var_os("FLUX_LSP_CONFIG");
+    editor.lsp.configs = match user_configs.as_ref() {
         Some(path) => flux_lsp::config::from_json_file(std::path::Path::new(&path))
             .map_err(anyhow::Error::msg)?,
         None => flux_lsp::builtin_configs(),
@@ -66,6 +67,9 @@ fn main() -> Result<()> {
         })
         .cloned()
         .collect();
+    if user_configs.is_none() {
+        editor.lsp.auto_enabled = editor.lsp.enabled.iter().map(|c| c.name.clone()).collect();
+    }
     editor.open_args(&files);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -184,7 +188,10 @@ async fn run(mut editor: Editor) -> Result<()> {
         renderer.draw(&mut out, &grid, cursor)?;
         last_grid = Some(grid);
 
-        servers.flush(&mut editor);
+        if servers.flush(&mut editor) {
+            // A spawn error has no server event to wake the loop; redraw its message now.
+            continue;
+        }
         // A debounced semantic tokens request to send.
         let wake = editor
             .lsp
