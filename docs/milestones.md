@@ -449,6 +449,9 @@ Known gaps:
 
 ## M7: Picker, Lua config, clipboard
 
+flux ignores `NO_COLOR`, like Neovim. Its screen relies on color for information such as the
+Visual selection and the statusline, and it has no monochrome mode.
+
 - Deferred oracle cases now run: six `:g`/`:v`/`:norm` cases were retagged M4 (that milestone implemented them), so 1157 cases match. Six are deferred and checked to still differ: visual-block ×4, `CTRL-A`, `das`.
 - Add TOML configuration for static editor preferences and the planned Lua API for programmable
   configuration such as behavior, commands and keymaps.
