@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-03 (M7 finish / quality gates); unblocks honest numbers for F-15, F-17, F-18 |
 | Size | S (≈ half a day) |
-| Spec status | **Ready to implement.** No blocking owner decision |
+| Spec status | **Shipped** in #10 (`b7f3341`), Oct 6, 2026 |
 | Repo state | `BobaFetch/flux` @ `27f9a2a` (main), read Oct 5, 2026 |
 | Proposed branch / PR title | `oracle-deferred` / **Run deferred oracle cases and report them instead of skipping silently** |
 | Sector 5 routing | Fina (`crates/flux-vim/tests/oracle.rs`, `cases.json` tags; Fina owns `crates/*/tests/**` per `.sectorfive/ownership.md`) → docs via Y'shtola. No Lightning, Aerith or Tifa work. No `gen`: `expected.json` is untouched |
@@ -81,7 +81,7 @@ Every recorded Neovim case runs on every test run. Deferred cases are visible an
 | A2 (strictness) | Temporarily set `g-delete` back to `"m": 9`, then run A1 | `deferred_cases_still_differ` FAILS, naming `g-delete`. Revert |
 | A3 (in-scope) | Temporarily set `ctrl-a` to `"m": 4`, then run A1 | `matches_neovim` FAILS with `1 of 1158 oracle cases differ`, naming `ctrl-a`. Revert |
 | A4 | `python3 -c "import json,collections;c=json.load(open('crates/flux-vim/tests/oracle/cases.json'));print(len(c),sorted(collections.Counter(x['m'] for x in c).items()))"` | `1163 [(0, 38), (1, 303), (2, 207), (3, 175), (4, 353), (5, 39), (6, 42), (9, 6)]` |
-| A5 | `git diff --stat main` | `expected.json` and `NVIM_VERSION` untouched; `cases.json` has exactly 6 changed lines |
+| A5 | `git diff --stat origin/main...HEAD` | `expected.json` and `NVIM_VERSION` untouched; `cases.json` has exactly 6 changed lines |
 | A6 | Oracle workflow (`.github/workflows/oracle.yml`, triggered by the `cases.json` change) | Green: recorded results still match Neovim 0.12.5 |
 | A7 | `rg -n "silently skipped|All 1163" AGENTS.md README.md docs/` | No matches |
 
