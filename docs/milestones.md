@@ -399,7 +399,7 @@ Known gaps:
 - `:lsp enable|disable|restart|stop [name …]`.
 
 Verified:
-- All 1163 oracle cases match Neovim 0.12.5 (54 new, mostly `gq`/`gw`).
+- All 1151 M0–M6 oracle cases match Neovim 0.12.5 (42 new, all `gq`/`gw`); 12 cases recorded for later milestones were skipped.
 - `cargo xtask screens` runs a scripted fake language server (`flux-lsp-fake`) under both
   Neovim and flux for the LSP samples and compares the screens cell by cell: 120 samples (94 new),
   all identical in 24-bit and 16 colors (diagnostics, floats, hover, quickfix and the LSP
@@ -449,6 +449,7 @@ Known gaps:
 
 ## M7: Picker, Lua config, clipboard
 
+- Deferred oracle cases now run: six `:g`/`:v`/`:norm` cases were retagged M4 (that milestone implemented them), so 1157 cases match. Six are deferred and checked to still differ: visual-block ×4, `CTRL-A`, `das`.
 - Add TOML configuration for static editor preferences and the planned Lua API for programmable
   configuration such as behavior, commands and keymaps.
 - Make LSP completion optionally automatic while typing, like VS Code or Zed, while preserving

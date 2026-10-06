@@ -2,7 +2,8 @@
 //!
 //! `oracle/cases.json` holds the inputs and `oracle/expected.json` what Neovim did with them
 //! (regenerate with `cargo xtask oracle gen`). Each case is tagged with the milestone that
-//! implements its keys; cases above `MILESTONE` are skipped until then.
+//! implements its keys. Cases above `MILESTONE` are deferred: they still run and must
+//! differ from Neovim, then get retagged when they start matching.
 
 use flux_view::Editor;
 use flux_vim::{Engine, parse_keys};
@@ -237,8 +238,7 @@ fn run_case(case: &Value, expected: &Value) -> Vec<String> {
     diffs
 }
 
-#[test]
-fn matches_neovim() {
+fn cases_and_expected() -> (Vec<Value>, Vec<Value>) {
     let cases: Vec<Value> = serde_json::from_str(include_str!("oracle/cases.json")).unwrap();
     let expected: Vec<Value> = serde_json::from_str(include_str!("oracle/expected.json")).unwrap();
     assert_eq!(
@@ -246,15 +246,26 @@ fn matches_neovim() {
         expected.len(),
         "expected.json is stale; run `cargo xtask oracle gen`"
     );
-
-    let mut ran = 0;
-    let mut failures = Vec::new();
     for (case, want) in cases.iter().zip(&expected) {
         assert_eq!(
             case["id"], want["id"],
             "expected.json is stale; run `cargo xtask oracle gen`"
         );
+    }
+    (cases, expected)
+}
+
+#[test]
+#[allow(clippy::print_stderr)]
+fn matches_neovim() {
+    let (cases, expected) = cases_and_expected();
+
+    let mut ran = 0;
+    let mut deferred = 0;
+    let mut failures = Vec::new();
+    for (case, want) in cases.iter().zip(&expected) {
         if case["m"].as_u64().unwrap() > MILESTONE {
+            deferred += 1;
             continue;
         }
         ran += 1;
@@ -268,10 +279,73 @@ fn matches_neovim() {
             ));
         }
     }
+    assert_eq!(ran + deferred, cases.len());
     assert!(
         failures.is_empty(),
         "{} of {ran} oracle cases differ from Neovim:\n  {}",
         failures.len(),
         failures.join("\n  ")
+    );
+    eprintln!("oracle: {ran} cases up to M{MILESTONE} match Neovim");
+}
+
+#[test]
+#[allow(clippy::print_stderr)]
+fn deferred_cases_still_differ() {
+    let (cases, expected) = cases_and_expected();
+
+    let mut ran = 0;
+    let mut in_scope = 0;
+    let mut still_differ = Vec::new();
+    let mut failures = Vec::new();
+    for (case, want) in cases.iter().zip(&expected) {
+        if case["m"].as_u64().unwrap() <= MILESTONE {
+            in_scope += 1;
+            continue;
+        }
+        ran += 1;
+        let diffs = run_case(case, want);
+        if diffs.is_empty() {
+            failures.push(format!(
+                "{} (keys {})",
+                case["id"].as_str().unwrap(),
+                keys_of(case)
+            ));
+        } else {
+            still_differ.push(case["id"].as_str().unwrap());
+        }
+    }
+    assert_eq!(in_scope + ran, cases.len());
+    assert!(
+        failures.is_empty(),
+        "{} deferred oracle cases now match Neovim; set their \"m\" in cases.json to the milestone that implemented them:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+    if still_differ.is_empty() {
+        eprintln!("oracle: 0 deferred cases (above M{MILESTONE})");
+    } else {
+        eprintln!(
+            "oracle: {ran} deferred cases (above M{MILESTONE}) still differ: {}",
+            still_differ.join(", ")
+        );
+    }
+}
+
+#[test]
+fn case_ids_are_unique() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!("oracle/cases.json")).unwrap();
+    let mut ids = std::collections::HashSet::new();
+    let mut duplicates = Vec::new();
+    for case in &cases {
+        let id = case["id"].as_str().unwrap();
+        if !ids.insert(id) {
+            duplicates.push(id);
+        }
+    }
+    assert!(
+        duplicates.is_empty(),
+        "duplicate oracle case ids: {}",
+        duplicates.join(", ")
     );
 }
