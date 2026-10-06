@@ -11,6 +11,7 @@ authors.workspace = true
 flux-core.workspace = true
 flux-lsp.workspace = true
 flux-syntax.workspace = true
+ignore = "0.4.33"
 serde_json.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
