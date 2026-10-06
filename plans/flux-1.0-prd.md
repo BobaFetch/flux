@@ -4,6 +4,7 @@ Status: Draft v1, Oct 5, 2026. Owner: you. PM: Aerith.
 Grounded in https://github.com/BobaFetch/flux at `27f9a2a` (read-only) and `plans/repo-review.md`.
 Decided: "complete" means a **public 1.0 that other people can install**. No hard date; ship when solid.
 Decided (Oct 5, 2026): the binary/command, config path (`~/.config/flux/`) and Lua namespace (`flux.*`) stay **`flux`**. The package name is **`flux-editor`** (verified free on crates.io and Homebrew core on Oct 5, 2026).
+Decided (Oct 6, 2026): Stable `flux.*` items are frozen under semver for all of 1.x; anything else is marked Experimental and may change in a minor release (spec F-07, decision D2). A failing `init.lua` keeps what ran before the error, like Neovim (F-07 D1). A built-in language server that flux started on its own and that fails is reported on one line and in `lsp.log`, with no new `:lsp status` command (F-13 D1).
 
 ---
 
@@ -31,7 +32,7 @@ They live in macOS or Linux terminals. Secondary audience: Rust developers who m
 | S1 | One-command install | Homebrew tap formula `flux-editor` (macOS arm64/x86_64, Linux), prebuilt binaries for macOS arm64/x86_64 and Linux x86_64/arm64, `cargo install flux-editor`. Every channel installs the `flux` command. Each is verified on a clean runner in CI per release |
 | S2 | Vim parity honesty | 100% of 1.0-scope oracle cases pass. **Zero silently skipped cases**: anything deferred is listed and reported by the test run |
 | S3 | Responsiveness | First frame ≤ 100 ms for a typical source file. 200,000-line file opens ≤ 0.5 s. Tested commands respond ≤ 30 ms (milestones.md records 0.3 s and < 30 ms today) |
-| S4 | Clean first run | On a machine with no config and no language servers, flux never shows a blocking prompt at startup. A broken `init.lua` shows a message and flux starts with stock settings |
+| S4 | Clean first run | On a machine with no config and no language servers, flux never shows a blocking prompt at startup. A broken `init.lua` shows a message and flux starts; settings before the error stay applied, the rest don't run (like Neovim) |
 | S5 | No lost work | After the process is killed mid-edit, recovery restores unsaved changes in 100% of recovery tests. Saves stay atomic (already true) |
 | S6 | Documented | Every 1.0 feature appears in the supported-features matrix. The Lua API reference covers 100% of the public `flux.*` surface |
 
@@ -43,11 +44,11 @@ They live in macOS or Linux terminals. Secondary audience: Rust developers who m
 - **Picker fix.** `:Files` respects `.gitignore` (plus common build directories when no git). A file cap must never hide whole directories. Today `walk_files` (`crates/flux-view/src/explorer.rs`, cap 5000 at `crates/flux-vim/src/ex.rs:1446`) only skips dot-files; after a build, `target/` starves `xtask/` (reproduced).
 - **Stage B sign-off.** Pickers (`:Files`, `:Buffers`) and command-line Tab completion pass the team's verify gate, recorded in `.sectorfive/decisions.md`.
 - **Stage C: Lua config** (mlua 0.12, `lua54` + `vendored`, per `.sectorfive/plans/m7.md`):
-  - `init.lua` loaded from the XDG config path. A missing file means stock behavior. Errors show a message and never crash.
+  - `init.lua` loaded from the XDG config path. A missing file means stock behavior. Errors show a message and never crash; statements before the error stay applied (like Neovim). `--clean` and `-u FILE|NONE` choose the config.
   - `flux.opt` covers every implemented option. `flux.map` gives per-mode, non-recursive keymaps. `flux.lsp` replaces `$FLUX_LSP_CONFIG`, which stays as a test override.
   - `:colorscheme` (built-in `default` plus at least one alternate, including a light-friendly scheme) and `:highlight` (inspect and override).
-  - The API is documented as **stable for 1.x**. Anything not ready is marked experimental.
-- **Config format:** Lua only for 1.0 (recommended; matches the approved M7 plan). TOML is dropped from 1.0 scope (§7).
+  - Stable `flux.*` items are frozen under semver for all of 1.x (additions allowed in minor releases; no removals or meaning changes before 2.0). Anything not ready is documented as Experimental and may change in a minor release. Decided Oct 6, 2026.
+- **Config format:** Lua only for 1.0 (decided; matches the approved M7 plan). TOML is dropped from 1.0 scope (§7).
 
 ### 2.2 Day-one Vim gaps (ranked)
 | Rank | Gap | 1.0? | Why |
@@ -66,7 +67,7 @@ Also 1.0, because new users hit them right away (verified missing in `crates/flu
 - **Options people put in configs:** `'scrolloff'`, `'wrap'`, `'list'`/`'listchars'`, `'cursorline'`, `'colorcolumn'`, `'mouse'`, `'clipboard'`, `'swapfile'`. Unknown options currently give E518.
 
 ### 2.3 First-run experience
-- **FR-1** Missing, broken or failing language servers never block startup. Report through the statusline or `:lsp` and the log, not a hit-enter prompt. Today a non-working `rust-analyzer` on PATH (for example a rustup proxy without the component) produces a blocking hit-enter prompt (observed on the box).
+- **FR-1** Missing, broken or failing language servers never block startup. A built-in server that flux started on its own and that fails to start is reported with one warning line that fits the screen (naming the server and `lsp.log`), is not retried for the session, and never causes a hit-enter prompt; `:lsp enable <name>` retries it. Servers the user enabled (`:lsp enable`, `flux.lsp`, `$FLUX_LSP_CONFIG`) keep Neovim's message. No new `:lsp status` command for 1.0 (decided Oct 6, 2026; spec F-13). Today a non-working `rust-analyzer` on PATH (for example a rustup proxy without the component) produces a blocking hit-enter prompt (reproduced on Linux on Oct 6, 2026; see `specs/F-13-graceful-lsp-startup.md`).
 - **FR-2** Sane defaults with no config: Neovim's defaults (already the reference), truecolor detection (exists), a readable scheme on light terminals (`:set bg=light` today; at least documented).
 - **FR-3** `:help [topic]` opens bundled docs (feature matrix, Lua API, keys) inside flux. `flux --help` points to the same docs.
 - **FR-4** `flux --version` and `--help` exist (`crates/flux/src/main.rs`); add `--clean` (ignore config) and `-r` (recover).
@@ -103,7 +104,7 @@ Also 1.0, because new users hit them right away (verified missing in `crates/flu
 3. **Configure.** I create `~/.config/flux/init.lua` with `flux.opt` (numbers, tabs, `clipboard = "unnamedplus"`), a few `flux.map` keymaps and `:colorscheme`. A typo shows a clear error, and flux still opens.
 4. **Muscle memory.** I use `CTRL-V` to add `;` to ten lines, `CTRL-A` to bump a version, `das` to drop a sentence, `R` to overwrite. Everything does exactly what Vim does.
 5. **Find and jump.** `:Files` finds any source file in a large Rust repo instantly, never shows `target/`, and `:Buffers` switches files.
-6. **LSP with no setup.** I open a TypeScript file. If the server is installed, I get diagnostics and hover. If not, flux just works without it and `:lsp` tells me why.
+6. **LSP with no setup.** I open a TypeScript file. If the server is installed, I get diagnostics and hover. If it's installed but broken, flux tells me in one line and `lsp.log` says why. If it isn't installed, flux just works without it.
 7. **Crash.** My terminal dies mid-edit. Reopening the file offers recovery and I get my changes back.
 8. **Shell.** `:!cargo test`, and `!ip sort` over a block, work like Vim's.
 9. **Evaluate fit.** Before switching, I read the feature matrix and see exactly what's supported and what isn't.
@@ -155,4 +156,3 @@ Also 1.0, because new users hit them right away (verified missing in `crates/flu
 1. **Targets:** Linux arm64 and a static/musl build at 1.0? Minimum macOS version?
 2. **Defaults:** mouse on by default like Neovim (`mouse=nvi`) or off? Confirm LSP auto-completion is post-1.0.
 3. **Process:** must every change go through a PR (M7 A/B went straight to `main`)? Who gives final 1.0 sign-off: you, or Fina's gate? Should the existing Sector 5 "Aerith" role be renamed to avoid confusion with your PM agent?
-4. **API promise:** is `flux.*` frozen under semver for all of 1.x, with experimental items clearly marked?

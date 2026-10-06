@@ -74,7 +74,7 @@ The test suite gives the same result in any terminal environment, and flux's col
 2. Tests run in parallel threads within one process. The override is process-global, so any test that sets it must only ever set `true`. No test may set `false`.
 3. `TERM=dumb`: flux has no dumb-terminal mode today, and this spec does not add one. Tests just have to pass.
 4. `CI` or other common CI variables: no effect.
-5. Under A, a user who exports `NO_COLOR` for CLI tools gets a colored flux. That is intended, matches Neovim, and is documented (§10).
+5. A user who exports `NO_COLOR` for other CLI tools gets a colored flux. This is the decided behavior: it matches Neovim and is documented (§10).
 
 ## 7. Acceptance criteria
 | # | Command | Expected |
@@ -105,7 +105,7 @@ The test suite gives the same result in any terminal environment, and flux's col
 ## 11. Risks
 - **Global override.** `force_color_output` is process-wide. Calling it from the renderer constructor is a side effect in a constructor; it is acceptable because it is idempotent and documents the product rule. The alternative is a single startup call plus a test helper (R2).
 - **Product change.** `NO_COLOR` users get colors. This is a deliberate move to Neovim parity, approved by the owner on Oct 5, 2026.
-- **`cargo xtask screens` under `NO_COLOR`** probably mismatches today, because flux would draw no colors while Neovim does. This was not run (the box has no Neovim). This change fixes it as a side effect.
+- **`cargo xtask screens` under `NO_COLOR`** probably mismatches today, because flux would draw no colors while Neovim does. This was not run (the PM's Linux test machine had no Neovim installed when this spec was written). This change fixes it as a side effect.
 - **Rollback:** revert the PR. No data or format changes.
 
 ## 12. Definition of done

@@ -23,7 +23,7 @@ So one big early directory fills the cap and later directories are never reached
 - `target/` held 5,473 non-hidden files. The current order put the first `target/` file at index 333 and `xtask/oracle.lua` at index 5,809.
 - `walk_files(<repo>, 5000)` returned 5,000 paths, 4,667 of them under `target/`, and **no `xtask/oracle.lua`**. Run from a scratch crate outside the repo.
 - So in the editor, `:Files oracle.lua` cannot find `xtask/oracle.lua`. The same symptom was seen earlier with a 6,741-file `target/`; the exact counts depend on the build.
-- For comparison, a gitignore-aware walk (the `ignore` crate with default filters) over the same tree took 2 ms (release build, on the box). It returned 646 files: 0 under `target/`, `xtask/oracle.lua` included. That equals `git ls-files | grep -v '^\.' | wc -l` (646).
+- For comparison, a gitignore-aware walk (the `ignore` crate with default filters) over the same tree took 2 ms (release build, on the PM's Linux x86_64 test machine). It returned 646 files: 0 under `target/`, `xtask/oracle.lua` included. That equals `git ls-files | grep -v '^\.' | wc -l` (646).
 
 The existing unit test `walk_lists_relative_skips_hidden_and_caps` (`explorer.rs:249-269`) locks in the "files first, then truncate" order: cap 2 gives `["a.rs", "b.rs"]`.
 

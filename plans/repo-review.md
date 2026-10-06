@@ -46,10 +46,10 @@ Repo: https://github.com/BobaFetch/flux (public, 2 stars, default branch `main`,
 - 0 issues. CI is green on every `main` push, including `27f9a2a` (https://github.com/BobaFetch/flux/actions).
 - Unmerged leftover branches: `directory-browser`, `docs/roadmap-and-agent-guide`, `m5-syntax`, `milestones-checked`.
 
-**Build and tests on the box** (Linux, Rust 1.98.0 installed with rustup):
+**Build and tests on the PM's Linux test machine** (Linux, Rust 1.98.0 installed with rustup):
 - `cargo fmt --all --check`: pass.
 - `cargo clippy --workspace --all-targets -- -D warnings`: pass.
-- `cargo test --workspace`: **184 of 185 pass**. The one failure, `flux-tui renderer::tests::default_colors_fill_in_and_force_a_redraw`, is caused by the box environment (`NO_COLOR=1`, `TERM=dumb`). It passes with `NO_COLOR` unset and `TERM=xterm-256color` (16/16). The baseline on Oct 3 recorded 162 tests (`.sectorfive/baseline.md`).
+- `cargo test --workspace`: **184 of 185 pass**. The one failure, `flux-tui renderer::tests::default_colors_fill_in_and_force_a_redraw`, is caused by that machine's environment (`NO_COLOR=1`, `TERM=dumb`). It passes with `NO_COLOR` unset and `TERM=xterm-256color` (16/16). The baseline on Oct 3 recorded 162 tests (`.sectorfive/baseline.md`).
 - Not run: `cargo deny check` (not installed here; CI runs it and it passed on the latest push), and the xtask oracle/indent/colors/screens checks (they need Neovim 0.12.5).
 - Smoke test in tmux:
   - The editor opens and renders.
