@@ -41,6 +41,15 @@ pub(super) fn draw_picker(
     };
     let x = grid.put_str_until(col, row, label, pmenu, col + w);
     grid.put_str_until(x, row, &picker.input, pmenu, col + w);
+    // `<listed>+` at the right of this window, after the prompt so it stays
+    // visible. A marker wider than the window is skipped.
+    if picker.truncated {
+        let marker = format!("{}+", picker.entry_count());
+        let marker_width = UnicodeWidthStr::width(marker.as_str());
+        if marker_width <= w {
+            grid.put_str_until(col + w - marker_width, row, &marker, pmenu, col + w);
+        }
+    }
     // The selection stays visible: the first shown row follows it.
     let first = picker.selected.saturating_sub(list_rows.saturating_sub(1));
     let shown = picker.shown_entries();
@@ -178,5 +187,59 @@ mod tests {
             theme.group("Pmenu").combine(theme.group("PmenuSel"))
         );
         assert_eq!(grid.cell(2, 5).style, theme.group("Pmenu"));
+    }
+
+    #[test]
+    fn picker_window_marks_a_truncated_list() {
+        let mut editor = Editor::new(40, 10);
+        editor.mode = Mode::CmdLine;
+        editor.cmdline_kind = ':';
+        let paths: Vec<PathBuf> = (0..5000)
+            .map(|i| PathBuf::from(format!("f{i}.txt")))
+            .collect();
+        // "zzz" matches nothing, so the shown count is not the listed count.
+        let mut full = Picker::files(paths.clone());
+        full.set_query("zzz");
+        let mut cut = Picker::files_truncated(paths, true);
+        cut.set_query("zzz");
+        assert_eq!(cut.entry_count(), 5000);
+        let shown = cut.shown_count();
+        assert_eq!(shown, 0);
+
+        editor.picker = Some(full);
+        let (_, cursor_full) = render(&editor);
+        editor.picker = Some(cut);
+        let (grid, cursor) = render(&editor);
+
+        let (width, height) = editor.screen_size();
+        let avail = height.saturating_sub(flux_view::CMDLINE_ROWS);
+        let list_rows = shown.min(avail.saturating_sub(1));
+        let h = list_rows + 1;
+        let w = match width.saturating_sub(4) {
+            n if n >= 10 => n,
+            _ => width,
+        };
+        let col = width.saturating_sub(w) / 2;
+        let row = avail.saturating_sub(h) / 2;
+        let marker = "5000+";
+        let start = col + w - marker.len();
+        let theme = Theme::new(&editor);
+        let pmenu = theme.group("Pmenu");
+        for (i, ch) in marker.chars().enumerate() {
+            let cell = grid.cell(start + i, row);
+            assert_eq!(cell.symbol, ch.to_string());
+            assert_eq!(cell.style, pmenu);
+        }
+        assert_eq!(grid.cell(start - 1, row).symbol, " ");
+        assert_eq!(grid.cell(start - 1, row).style, pmenu);
+        let label = "Files> ";
+        for (i, ch) in label.chars().enumerate() {
+            assert_eq!(grid.cell(col + i, row).symbol, ch.to_string());
+            assert_eq!(grid.cell(col + i, row).style, pmenu);
+        }
+        assert_eq!(grid.cell(col + label.len(), row).symbol, "z");
+        let expected = col + label.len() + "zzz".len();
+        assert_eq!(cursor, Some((expected.min(col + w - 1), row)));
+        assert_eq!(cursor, cursor_full);
     }
 }
