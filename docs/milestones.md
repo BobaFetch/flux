@@ -370,6 +370,9 @@ Known gaps:
   incrementally (in UTF-8, UTF-16 or UTF-32 positions, as the server prefers); saves and
   buffer deletes are reported; servers are shut down on quit. The server log is
   `~/.local/state/flux/lsp.log`.
+- A built-in server that fails to start is reported once on one line and not retried for the
+  session; `:lsp enable <name>` retries it. Explicitly configured servers retain Neovim's
+  full failure message.
 - Diagnostics as Neovim shows them: signs in the sign column (`'signcolumn'`), underlines
   colored by severity, `E:1 W:2` in the statusline, held back while in Insert mode, and kept
   in place as the text is edited. `]d` `[d` `]D` `[D` jump, `CTRL-W d` opens a float with

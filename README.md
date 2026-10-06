@@ -26,6 +26,10 @@ cargo test --workspace                    # all tests (plain `cargo test` covers
 | `flux` | The `flux` binary: terminal setup and the event loop. |
 | `xtask` | Project automation (`cargo xtask …`). |
 
+A built-in language server that fails to start is reported once on one line and not retried for
+this session; `:lsp enable <name>` retries it. Server errors are logged to
+`~/.local/state/flux/lsp.log` (or `$XDG_STATE_HOME/flux/lsp.log` when set).
+
 ## Checking behavior against Neovim
 
 `crates/flux-vim/tests/oracle/cases.json` lists key sequences, each tagged with the milestone
