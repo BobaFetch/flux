@@ -4,6 +4,7 @@
 
 - The workspace is pinned to Rust 1.98.0. `cargo run -- path/to/file` runs the editor because `crates/flux` is the only default member.
 - Do not use plain `cargo test` as the full check; it covers only the default binary. Run `cargo test --workspace`.
+- Tests must not depend on `TERM`, `NO_COLOR` or `COLORTERM`; CI also runs `cargo test --workspace` with `NO_COLOR=1 TERM=dumb`.
 - Reproduce CI in this order: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`.
 - Focus a crate or unit test with `cargo test -p <crate>` or `cargo test -p <crate> <test-name>`.
 - The Neovim behavior suite is `cargo test -p flux-vim --test oracle`. It replays all cases through flux against committed results; it does not invoke Neovim.

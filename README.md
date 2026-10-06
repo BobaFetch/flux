@@ -26,6 +26,9 @@ cargo test --workspace                    # all tests (plain `cargo test` covers
 | `flux` | The `flux` binary: terminal setup and the event loop. |
 | `xtask` | Project automation (`cargo xtask …`). |
 
+flux ignores `NO_COLOR`, like Neovim. Its screen relies on color for information such as the
+Visual selection and the statusline, and it has no monochrome mode.
+
 ## Checking behavior against Neovim
 
 `crates/flux-vim/tests/oracle/cases.json` lists key sequences, each tagged with the milestone
