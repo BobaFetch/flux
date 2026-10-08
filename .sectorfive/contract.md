@@ -215,11 +215,11 @@ Routing follows `ownership.md`: a task goes to the role that owns the paths it c
 | --- | --- | --- | --- |
 | Lightning | `openai-codex/gpt-6.1-sol` | medium (high when the plan marks hard engine or parity work) | Strongest coding per unit of ChatGPT usage; smaller GPT models are far weaker at agentic coding |
 | Yuna | `xai/grok-4.7` | medium | Same token price as older Grok with better coding; high and xhigh roughly double its tokens |
-| Tifa | `openai-codex/gpt-6-luna` | high | Small, well-scoped diffs; image input; a small fraction of Sol's usage. Rework falls back to `meta/muse-spark-1.3` low |
-| Fina | `meta/muse-spark-1.3` (always; see Fina's model) | high for code PRs; medium for docs/meta-only or polish-only PRs | Strong, skeptical reviewer from a different family than the GPT and Grok builders; 1.3 matches 1.2's price with fewer tokens per task |
+| Tifa | `openai-codex/gpt-6-luna` | high | Small, well-scoped diffs; image input; a small fraction of Sol's usage. Rework falls back to `openai-codex/gpt-6.1-sol` low, so polish stays off Muse |
+| Fina | `meta/muse-spark-1.3` (always; see Fina's model) | high; medium only for Markdown-only docs/meta PRs (see Fina's model) | Strong, skeptical reviewer from a different family than the GPT and Grok builders; 1.3 matches 1.2's price with fewer tokens per task |
 | Y'shtola | `meta/muse-spark-1.3` | medium | Long context (1M) for specs, plans and history; planning and docs don't need high |
 
-**Fina's model.** Fina always runs on `meta/muse-spark-1.3`: high thinking for any PR that changes code, tests, build or CI config; medium for a docs/meta-only PR (only docs, `.sectorfive/`, `.grok/`, `AGENTS.md` or other Markdown) or a polish-only PR (Tifa's diff alone). When unsure, high. The builders (Lightning and Tifa on GPT, Yuna on Grok) are other families, so Fina never verifies her own family's work.
+**Fina's model.** Fina always runs on `meta/muse-spark-1.3` with high thinking. She uses medium only for a docs/meta-only PR, where every changed file is Markdown under `.sectorfive/`, `.grok/`, `docs/` or `AGENTS.md`. Any other change gets high: scripts (including `.sectorfive/bin/**`), CI, Rust (including Tifa's polish strings), tests, build config, or any non-Markdown file. When unsure, high. The builders (Lightning and Tifa on GPT, Yuna on Grok) are other families, so Fina never verifies her own family's work.
 
 - Exception: if Muse wrote code in the change (a builder ran on Muse by override), Fina runs on `openai-codex/gpt-6.1-sol` high for that change, and Y'shtola records it in `decisions.md`. Tifa's polish-surface diff does not count as writing the change.
 - Fina's verdict names the model it ran on; every completion report names the builder's model.
@@ -234,7 +234,7 @@ Y'shtola's docs/meta edits, like Tifa's polish diff, never trigger Fina's GPT ex
 - [ ] Baseline commands pass with no new warnings; manual terminal checks done for user-visible changes.
 - [ ] No dangerous action taken without recorded approval.
 - [ ] Completion report present and accurate, including the model used.
-- [ ] Verified on Muse Spark 1.3 (high for code PRs, medium for docs/meta-only or polish-only PRs), or on GPT-6.1 Sol high if Muse built the change (recorded by Y'shtola).
+- [ ] Verified on Muse Spark 1.3 (high; medium only when every changed file is Markdown under `.sectorfive/`, `.grok/`, `docs/` or `AGENTS.md`), or on GPT-6.1 Sol high if Muse built the change (recorded by Y'shtola).
 
 **Veto conditions (any one blocks completion):** out-of-scope files touched; unplanned contract break; red or skipped verification; dangerous action without approval; missing or false completion evidence. Vetoes return to the owning role via Y'shtola with cited reasons — never fixed forward by Fina.
 
@@ -243,4 +243,4 @@ Y'shtola's docs/meta edits, like Tifa's polish diff, never trigger Fina's GPT ex
 - v2: explicit ownership; Tifa as post-flow polish phase; bootstrap and `.sectorfive/` schema; startup and completion rituals; handoff and plan templates; definition of done; dangerous actions; regression rules; model policy; Fina checklist and veto.
 - v2.1: roles prefix user-visible chat replies with `[name]`; file contents unprefixed.
 - v3 (2026-10-07, Flux): contract moved into the repo as a dev-only file; drawing role renamed Aerith → Yuna; terminal-editor wording and Flux paths; pinned defaults per role, with Fina always on Muse Spark 1.3; routing follows `ownership.md` (external dispatcher dropped); PM writes specs in `plans/specs/`; the PM may merge once Fina approves and CI is green, otherwise the user merges; build roles never merge.
-- v3.1 (2026-10-07): efficiency-first model policy; user-set defaults: Lightning GPT-6.1 Sol medium, Yuna Grok 4.7 medium, Tifa GPT-6 Luna high, Fina Muse Spark 1.3 high (medium for docs/meta-only or polish-only PRs), Y'shtola Muse Spark 1.3 medium.
+- v3.1 (2026-10-07): efficiency-first model policy; user-set defaults: Lightning GPT-6.1 Sol medium, Yuna Grok 4.7 medium, Tifa GPT-6 Luna high (GPT-6.1 Sol low on rework), Fina Muse Spark 1.3 high (medium only for Markdown-only docs/meta PRs), Y'shtola Muse Spark 1.3 medium.
