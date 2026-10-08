@@ -29,6 +29,8 @@ jobs:
           rustup show
           rustc --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: neovim
       - run: cargo xtask oracle check
       - run: cargo xtask indent check
       - run: cargo xtask colors check
