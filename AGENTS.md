@@ -38,7 +38,7 @@ Dev-only: these roles, `.sectorfive/` and `.grok/` are used to build Flux and ar
 - **Lightning**: engine and core (`flux-core`, `flux-vim`, `flux-view`, `flux-syntax`, `flux-lsp`, `servers.rs`, xtask, CI).
 - **Yuna**: drawing and terminal runtime (`crates/flux/src/main.rs`, `terminal.rs`, `flux-tui`).
 - **Tifa**: polish and copy, after a flow works; never changes behavior.
-- **Fina**: tests and verification; can veto; never verifies on the model family that built the change.
+- **Fina**: tests and verification; can veto; always runs on Muse Spark 1.3 (GPT-6.1 Sol if Muse built the change).
 - **Y'shtola**: plans, sequencing, `.sectorfive/`, docs.
 
 Every path has one owner: `.sectorfive/ownership.md`. Rules and templates: `.sectorfive/contract.md`. Briefs and pinned models: `.sectorfive/roles/<name>.md`.

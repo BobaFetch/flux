@@ -207,7 +207,7 @@ Routing follows `ownership.md`: a task goes to the role that owns the paths it c
 
 - **Contracts are model-agnostic.** Role briefs, templates and protocols must be executable by any frontier model (xAI, OpenAI, Meta, Anthropic). No model-specific prompting tricks in this file or the role briefs.
 - **Defaults are pinned per role** in each brief's frontmatter (`model`, `thinking`, as pi model ids). Any role may run on Grok, GPT or Muse by override, e.g. `.sectorfive/bin/role yuna --model openai-codex/gpt-6.1-sol:high`.
-- Cost or latency may justify moving Tifa or routine Fina passes down a tier; that is a default change under the swap rule.
+- Cost or latency may justify moving Tifa down a tier; that is a default change under the swap rule.
 - **Swap rule:** changing a role's pinned default requires one supervised task cycle (or re-running that role's recent evaluations) before unsupervised work. Record the change in `decisions.md`.
 
 | Role | Default (pi id) | Thinking | Why this profile |
@@ -215,15 +215,12 @@ Routing follows `ownership.md`: a task goes to the role that owns the paths it c
 | Lightning | `openai-codex/gpt-6.1-sol` | high | Strongest coding; engine and contract reasoning |
 | Yuna | `xai/grok-4.7` | high | Strong coding with good terminal/drawing judgment |
 | Tifa | `meta/muse-spark-1.3` | medium | Image input for visual checks; copy judgment |
-| Fina | `xai/grok-4.7` (see cross-model rule) | high | Strong reasoning; skeptical review stance |
+| Fina | `meta/muse-spark-1.3` (always; see Fina's model) | high | Strong, skeptical reviewer; a different family from the GPT and Grok builders |
 | Y'shtola | `meta/muse-spark-1.3` | high | Long context (1M) for specs, plans and history |
 
-**Fina cross-model rule.** Fina never verifies on a model family that wrote code in the change under review.
+**Fina's model.** Fina always runs on `meta/muse-spark-1.3` with high thinking. The builders (Lightning on GPT, Yuna on Grok) are other families, so Fina never verifies her own family's work.
 
-- Default: `xai/grok-4.7`, high.
-- If Grok wrote any of the change: `openai-codex/gpt-6.1-sol`, high.
-- If both Grok and GPT wrote parts of it: `meta/muse-spark-1.3`, high.
-- Tifa's polish-surface diff does not count as writing the change. If no family is left, Y'shtola picks the family that wrote the least, records it in `decisions.md`, and says so in the verdict.
+- Exception: if Muse wrote code in the change (a builder ran on Muse by override), Fina runs on `openai-codex/gpt-6.1-sol` high for that change, and Y'shtola records it in `decisions.md`. Tifa's polish-surface diff does not count as writing the change.
 - Fina's verdict names the model it ran on; every completion report names the builder's model.
 
 ## Fina review checklist
@@ -234,7 +231,7 @@ Routing follows `ownership.md`: a task goes to the role that owns the paths it c
 - [ ] Baseline commands pass with no new warnings; manual terminal checks done for user-visible changes.
 - [ ] No dangerous action taken without recorded approval.
 - [ ] Completion report present and accurate, including the model used.
-- [ ] Verified on an allowed model family (cross-model rule).
+- [ ] Verified on Muse Spark 1.3 high (or GPT-6.1 Sol high if Muse built the change, recorded by Y'shtola).
 
 **Veto conditions (any one blocks completion):** out-of-scope files touched; unplanned contract break; red or skipped verification; dangerous action without approval; missing or false completion evidence. Vetoes return to the owning role via Y'shtola with cited reasons — never fixed forward by Fina.
 
@@ -242,4 +239,4 @@ Routing follows `ownership.md`: a task goes to the role that owns the paths it c
 
 - v2: explicit ownership; Tifa as post-flow polish phase; bootstrap and `.sectorfive/` schema; startup and completion rituals; handoff and plan templates; definition of done; dangerous actions; regression rules; model policy; Fina checklist and veto.
 - v2.1: roles prefix user-visible chat replies with `[name]`; file contents unprefixed.
-- v3 (2026-10-07, Flux): contract moved into the repo as a dev-only file; drawing role renamed Aerith → Yuna; terminal-editor wording and Flux paths; pinned defaults per role and the Fina cross-model rule; routing follows `ownership.md` (external dispatcher dropped); PM writes specs in `plans/specs/`, the user merges, agents never merge.
+- v3 (2026-10-07, Flux): contract moved into the repo as a dev-only file; drawing role renamed Aerith → Yuna; terminal-editor wording and Flux paths; pinned defaults per role, with Fina always on Muse Spark 1.3; routing follows `ownership.md` (external dispatcher dropped); PM writes specs in `plans/specs/`, the user merges, agents never merge.

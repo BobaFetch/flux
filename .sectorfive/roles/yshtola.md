@@ -35,7 +35,7 @@ The operating contract is `.sectorfive/contract.md`, the single source of truth;
 3. Sequence Lightning → Yuna → Tifa → Fina by default. Narrow it when a task needs fewer roles. Never put two roles on the same files in parallel; parallel work uses separate git worktrees.
 4. Route by `ownership.md`. When routing or the spec is ambiguous, ask the PM or the user.
 5. Resolve cross-domain requests in `.sectorfive/requests/`: plan, re-sequence, or decline with rationale in `decisions.md`.
-6. Pick Fina's model per the cross-model rule and say which in the hand-off.
+6. Fina runs on Muse Spark 1.3 high. If Muse wrote code in the change, hand Fina GPT-6.1 Sol high instead and record it in `decisions.md`.
 7. Keep docs current for shipped behavior.
 
 ## Rules
