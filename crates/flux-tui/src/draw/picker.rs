@@ -40,13 +40,21 @@ pub(super) fn draw_picker(
         PickerKind::Buffers => "Buffers> ",
     };
     let x = grid.put_str_until(col, row, label, pmenu, col + w);
-    grid.put_str_until(x, row, &picker.input, pmenu, col + w);
-    // `<listed>+` at the right of this window, after the prompt so it stays
-    // visible. A marker wider than the window is skipped.
+    let prompt_end = grid.put_str_until(x, row, &picker.input, pmenu, col + w);
+    let before: String = picker.input.chars().take(picker.pos).collect();
+    // Same cursor as an untruncated prompt: label bytes plus the query width,
+    // clamped to the window. The marker must not move it.
+    let cursor = (col + label.len() + UnicodeWidthStr::width(before.as_str()))
+        .min(col + w.saturating_sub(1));
+    // `<listed>+` right-aligned, only in columns the label, query, and cursor
+    // do not occupy. Dropped when it would cover them or exceed the window,
+    // so a long query is never shifted or clipped to make room.
     if picker.truncated {
         let marker = format!("{}+", picker.entry_count());
         let marker_width = UnicodeWidthStr::width(marker.as_str());
-        if marker_width <= w {
+        let occupied_end = prompt_end.max(cursor.saturating_add(1)).min(col + w);
+        let room = (col + w).saturating_sub(occupied_end);
+        if marker_width > 0 && marker_width <= room {
             grid.put_str_until(col + w - marker_width, row, &marker, pmenu, col + w);
         }
     }
@@ -63,9 +71,7 @@ pub(super) fn draw_picker(
             grid.put_str_until(col, row + 1 + i, &entry.text, style, col + w);
         }
     }
-    let before: String = picker.input.chars().take(picker.pos).collect();
-    let cursor = col + label.len() + UnicodeWidthStr::width(before.as_str());
-    Some((cursor.min(col + w.saturating_sub(1)), row))
+    Some((cursor, row))
 }
 
 /// Draw the wildmenu row at grid row `y`: the matches across the whole row in
@@ -241,5 +247,50 @@ mod tests {
         let expected = col + label.len() + "zzz".len();
         assert_eq!(cursor, Some((expected.min(col + w - 1), row)));
         assert_eq!(cursor, cursor_full);
+    }
+
+    #[test]
+    fn picker_window_keeps_a_long_query_clear_of_the_truncation_marker() {
+        let paths: Vec<PathBuf> = (0..5000)
+            .map(|i| PathBuf::from(format!("f{i}.txt")))
+            .collect();
+        let render_query = |query: &str| {
+            let mut editor = Editor::new(40, 10);
+            editor.mode = Mode::CmdLine;
+            editor.cmdline_kind = ':';
+            let mut full = Picker::files(paths.clone());
+            full.set_query(query);
+            let mut cut = Picker::files_truncated(paths.clone(), true);
+            cut.set_query(query);
+            editor.picker = Some(full);
+            let (grid_full, cursor_full) = render(&editor);
+            editor.picker = Some(cut);
+            let (grid_cut, cursor_cut) = render(&editor);
+            (grid_full, cursor_full, grid_cut, cursor_cut)
+        };
+
+        // 40 columns, query longer than the prompt row: the marker is dropped.
+        // Label, query text, and cursor match the untruncated picker.
+        let long = "z".repeat(40);
+        let (grid_full, cursor_full, grid_cut, cursor_cut) = render_query(&long);
+        let row = cursor_cut.expect("cursor").1;
+        assert_eq!(cursor_cut, cursor_full);
+        assert_eq!(grid_cut.row_text(row), grid_full.row_text(row));
+        assert!(!grid_cut.row_text(row).contains("5000+"));
+        assert!(grid_cut.row_text(row).contains("Files> zzzz"));
+
+        // Same width, short query: the marker fits to the right of the prompt.
+        let (grid_full, cursor_full, grid_cut, cursor_cut) = render_query("ab");
+        let row = cursor_cut.expect("cursor").1;
+        let full_row = grid_full.row_text(row);
+        let cut_row = grid_cut.row_text(row);
+        let prompt = "Files> ab";
+        let prompt_at = cut_row.find(prompt).expect("prompt");
+        assert_eq!(cursor_cut, cursor_full);
+        assert_eq!(&full_row[prompt_at..prompt_at + prompt.len()], prompt);
+        assert!(cut_row.trim_end().ends_with("5000+"));
+        let marker_at = cut_row.find("5000+").expect("marker");
+        assert!(marker_at >= prompt_at + prompt.len());
+        assert!(!full_row.contains("5000+"));
     }
 }
