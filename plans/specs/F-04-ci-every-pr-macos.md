@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-04 (M9 release hardening; PRD FR-Q1, FR-Q2, FR-Q6) |
 | Size | S (≈ half a day, plus fixing whatever macOS surfaces) |
-| Spec status | 📄 Written Oct 7, 2026 |
+| Spec status | 📄 Written Oct 7, 2026; open questions resolved by the PM the same day (see Decisions) |
 | Repo state | `BobaFetch/flux` @ `48f5a44` (main), read Oct 7, 2026 |
 | Proposed branch / PR title | `ci-every-pr-macos` / **Run CI on macOS and the Neovim checks on every PR** |
 | Owner | Lightning (`.github/**`, toolchain files per `.sectorfive/ownership.md`) |
@@ -30,7 +30,7 @@ Every PR and every push to `main` gets the same release-blocking signal (FR-Q6, 
 - Performance budgets in CI (F-24).
 - Running the oracle/indent/colors checks on macOS. Recording is broken on macOS (F-23). The checks compare against Linux Neovim and stay Linux-only.
 - `cargo xtask screens` in CI (needs tmux plus Neovim, compares screens; separate decision).
-- Branch protection / required-status settings in GitHub (repo settings, not code; see Open questions).
+- Branch protection / required-status settings in GitHub (repo settings, not code; see Decision 1).
 - Windows (P-05).
 
 ## 4. Current vs required behavior
@@ -108,12 +108,12 @@ If a test fails only on macOS:
 ## 10. Risks
 
 - **Check names change.** `check` becomes per-OS names. Any branch-protection rule or script that waits on `check` must be updated (R11).
-- **`macos-latest` moves.** GitHub can point it at a new macOS image without notice. The A2 log line makes a change visible. Pinning (e.g. `macos-15`) is an open question.
+- **`macos-latest` moves.** GitHub can point it at a new macOS image without notice. The A2 log line makes a change visible. Pinning (e.g. `macos-15`) is deferred unless image changes cause trouble (Decision 2).
 - **macOS minutes on a public repo** are free for standard runners. A larger runner is not, so don't use one.
 - **Hidden macOS bugs.** The macOS suite passes locally, but runners differ: no TTY, a clean HOME, no Homebrew tools beyond the image. §6 decides what happens.
 
-## Open questions (user decision)
+## Decisions (resolved by the PM, Oct 7, 2026)
 
-1. **Required checks:** after merge, should the new checks (both OS test jobs, lint, Neovim) be required status checks on `main`? That's a repo setting the user changes, not part of this PR.
-2. **macOS runner label:** `macos-latest` (floating, as asked) or a pinned `macos-15` (predictable)? The spec defaults to `macos-latest`.
-3. **macOS x86_64:** the PRD targets macOS x86_64 at 1.0. Is testing on arm64 enough for CI, with x86_64 covered only by F-25 release builds? The spec assumes yes.
+1. **Required checks:** branch protection / required status checks are a repo setting for the user, not part of this PR. The PR body lists the exact check names to require after merge (R11). No repo tooling or doc polls the old single `check` name (searched `plans/`, `.sectorfive/`, `docs/`, `AGENTS.md` at `1e64e15`; only historical mentions in shipped specs remain). The PM's own CI polling waits on all checks of the head commit, not on `check`.
+2. **macOS runner label:** keep `macos-latest` (matches the request). Revisit, e.g. pin `macos-15`, only if image changes cause trouble.
+3. **macOS x86_64:** arm64-only CI is enough for now; x86_64 is covered by the F-25 release builds.
