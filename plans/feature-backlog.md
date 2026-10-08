@@ -37,7 +37,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-31 | CONTRIBUTING guide | Outside contributors after a public launch | S | F-04, F-23 | ★ | |
 | F-32 | 0.9 dry-run release on clean runners | Prove S1/S4 before 1.0 | S | F-25, F-26, F-13 | ★ | |
 | F-33 | 1.0 RC with outside testers → 1.0.0 | Real-user validation | M | all ★ | ★ | |
-| F-34 | Quickfix unit tests get their own temp folders (CI flake) | `quickfix::tests::going_through_the_list` races `the_quickfix_window` over one `flux-qf-<pid>` folder; failed CI on main at `97e6ba5` and `1a4ad7d` | XS | — | ★ | 📄 |
+| F-34 | Quickfix unit tests get their own temp folders (CI flake) | `quickfix::tests::going_through_the_list` races `the_quickfix_window` over one `flux-qf-<pid>` folder; failed CI on main at `97e6ba5` and `1a4ad7d` | XS | — | ★ | 🚢 #15 |
 | P-01 | Opt-in LSP auto-completion while typing | Requested in milestones.md M7; not Vim default | M | F-07 | — | post-1.0 |
 | P-02 | Tab pages; `\|` between commands; persistent undo; `q:` | Common but not day-one | M each | — | — | post-1.0 |
 | P-03 | Autocmds, user commands, plugin loading | Ecosystem; out of 1.0 scope | L | F-07 | — | post-1.0 |
