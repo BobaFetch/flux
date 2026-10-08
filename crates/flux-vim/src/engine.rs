@@ -1474,4 +1474,81 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn files_picker_skips_gitignored_files() {
+        let dir = temp_tree("gitignore");
+        std::fs::create_dir(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".gitignore"), "sub/\n").unwrap();
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&["a.txt".into()]);
+        let mut engine = Engine::new();
+
+        feed(&mut editor, &mut engine, ":Files<CR>");
+        let picker = editor.picker.clone().unwrap();
+        let texts: Vec<&str> = picker
+            .shown_entries()
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(texts, ["a.txt", "b.txt"]);
+        assert!(!picker.truncated);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_picker_omits_an_open_gitignored_buffer() {
+        let dir = temp_tree("gitopen");
+        std::fs::create_dir(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".gitignore"), "sub/\n").unwrap();
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&["a.txt".into()]);
+        editor.edit_file(std::path::Path::new("sub/c.txt")).unwrap();
+        let mut engine = Engine::new();
+
+        feed(&mut editor, &mut engine, ":Files<CR>");
+        let picker = editor.picker.clone().unwrap();
+        let texts: Vec<&str> = picker
+            .shown_entries()
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(texts, ["a.txt", "b.txt"]);
+        feed(&mut editor, &mut engine, "<Esc>:Buffers<CR>");
+        let picker = editor.picker.clone().unwrap();
+        let buffers: Vec<&str> = picker
+            .shown_entries()
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert!(buffers.iter().any(|text| text.contains("sub/c.txt")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_picker_with_nothing_eligible_fails_confirm() {
+        let dir = temp_tree("star");
+        std::fs::create_dir(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".gitignore"), "*\n").unwrap();
+        let mut editor = Editor::new(80, 24);
+        editor.cwd = dir.clone();
+        editor.open_args(&["a.txt".into()]);
+        let mut engine = Engine::new();
+
+        feed(&mut editor, &mut engine, ":Files<CR>");
+        let picker = editor.picker.clone().unwrap();
+        assert_eq!(picker.shown_count(), 0);
+        assert!(picker.selected_entry().is_none());
+        feed(&mut editor, &mut engine, "<CR>");
+        assert!(editor.picker.is_none());
+        assert_eq!(editor.mode, Mode::Normal);
+        assert_eq!(editor.current_buffer().name(), "a.txt");
+        assert!(engine.failed);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

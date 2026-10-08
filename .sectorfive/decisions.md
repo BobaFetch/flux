@@ -6,3 +6,5 @@
 - 2026-10-03: Stage A approved by Fina (1 veto issued + fixed in-turn: clipboard drain skipped on quit/EOF paths).
 - 2026-10-03 (B scope): pickers trigger via Ex commands `:Files [query]` / `:Buffers [query]` (fzf.vim-standard names); dedicated keys deferred to Stage C maps (no key squatting). Tab completion renders as a Neovim wildmenu row (parity); pickers render as a centered flux-own window. Picker key logic stays Lightning-owned (engine); B2 is rendering only.
 - 2026-10-03 (B design): no new Mode variant — picker rides Mode::CmdLine with `editor.picker` as discriminator (avoids cross-boundary edits; revisit with Stage C mode-maps). Ex-command candidates sort alphabetically (documented; revisit with screens evidence). Picker Tab/S-Tab move selection; Up/Down wrap. `:` cmdline only — `/`/`?`/`input()` keep literal Tab.
+- 2026-10-05: Owner approved `ignore` 0.4.33 (flux-view) as an explicit exception to the M7 plan's "no new deps outside mlua" rule (D4 / Success Criteria), for F-01 gitignore-aware `:Files`. Adds 9 crates, all MIT, Apache-2.0 or Unlicense; `cargo deny check` green.
+- 2026-10-06: F-01 approved by Fina (this unblocks F-06 (Stage B sign-off)).
