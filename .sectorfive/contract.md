@@ -224,6 +224,8 @@ Routing follows `ownership.md`: a task goes to the role that owns the paths it c
 - Exception: if Muse wrote code in the change (a builder ran on Muse by override), Fina runs on `openai-codex/gpt-6.1-sol` high for that change, and Y'shtola records it in `decisions.md`. Tifa's polish-surface diff does not count as writing the change.
 - Fina's verdict names the model it ran on; every completion report names the builder's model.
 
+Y'shtola's docs/meta edits, like Tifa's polish diff, never trigger Fina's GPT exception; only Lightning/Yuna code written under a Muse override does.
+
 ## Fina review checklist
 
 - [ ] Diff confined to plan scope and assignee ownership (check `ownership.md`).
