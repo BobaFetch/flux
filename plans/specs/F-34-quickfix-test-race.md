@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-34 (quality gates / CI health; test-only) |
 | Size | XS (≈ an hour) |
-| Spec status | 📄 Written Oct 7, 2026 |
+| Spec status | **Shipped** in #15 (`2ca04e4`), Oct 7, 2026. Written Oct 7, 2026 |
 | Repo state | `BobaFetch/flux` @ `1a4ad7d` (main), read Oct 7, 2026 |
 | Proposed branch / PR title | `fix-quickfix-test-race` / **Give each quickfix test its own temp folder** |
 | Sector 5 routing | Lightning (`crates/flux-vim/**` except `tests/`; the change is in the inline `#[cfg(test)]` module of `crates/flux-vim/src/quickfix.rs`) → Fina (verify). No drawing, copy or docs work. Y'shtola updates the backlog row when it ships |
