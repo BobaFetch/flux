@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-13 (M8 "1.0 gaps"; PRD FR-1 and success metric S4 "clean first run"). Prerequisite for F-32 (0.9 dry-run) |
 | Size | S (≈ 1 day agent time) |
-| Spec status | **Ready to implement.** All owner decisions settled Oct 6, 2026 (§ Decisions) |
+| Spec status | **Shipped** in #12 (`97e6ba5`), Oct 7, 2026. All owner decisions settled Oct 6, 2026 (§ Decisions) |
 | Repo state | `BobaFetch/flux` @ `d8ab89b` (main), read Oct 6, 2026 |
 | Proposed branch / PR title | `lsp-quiet-autostart` / **Don't block startup when an auto-started language server fails** |
 | Sector 5 routing | Lightning (`flux-view::lsp` state, `flux-vim::lsp::handle_exit`, `ex_lsp.rs`, unit tests) → Aerith (`main.rs` marks auto-enabled configs) → Tifa (warning copy) → Fina (verify). Docs via Y'shtola |

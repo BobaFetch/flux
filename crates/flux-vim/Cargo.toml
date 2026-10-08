@@ -18,4 +18,5 @@ unicode-width.workspace = true
 workspace = true
 
 [dev-dependencies]
+flux-lsp.workspace = true
 serde_json.workspace = true

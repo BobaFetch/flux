@@ -5,7 +5,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | ID | Title | Why (one line) | Size | Depends on | ★ | Ready |
 |---|---|---|---|---|---|---|
 | F-01 | Picker respects `.gitignore` and caps fairly | `:Files` misses real files after a build (`target/` fills the 5000 cap; reproduced) | S–M | — | ★ | 📄 |
-| F-02 | Tests independent of `TERM`/`NO_COLOR` | A `flux-tui` test fails under `NO_COLOR=1`; contributors' and CI environments vary | S | — | ★ | 📄 |
+| F-02 | Tests independent of `TERM`/`NO_COLOR` | A `flux-tui` test fails under `NO_COLOR=1`; contributors' and CI environments vary | S | — | ★ | 🚢 #11 |
 | F-03 | Oracle honesty: retag and report deferred cases | 12 `m: 9` cases are silently skipped; 6 already pass; "all 1163 match" is overstated | S | — | ★ | 🚢 #10 |
 | F-04 | Oracle/indent/colors CI on every PR + macOS CI job | Parity is checked only when fixtures change; macOS is untested in CI (now free: public repo) | S | — | ★ | ✅ |
 | F-05 | Name and packaging decision: **✅ decided Oct 5, 2026.** Command, config path and Lua namespace stay `flux`; package name `flux-editor` | crates.io/Homebrew `flux` names are taken; had to settle before the API namespace and config path freeze | S (decision) | — | ★ | ✅ done |
@@ -16,7 +16,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-10 | `flux.lsp.config`/`flux.lsp.enable` (replaces `$FLUX_LSP_CONFIG` for users; explicit enable feeds F-13's flag) | Users must add or adjust servers without env vars | S–M | F-07 | ★ | after F-07 |
 | F-11 | `:colorscheme` + `:highlight` + `flux.highlight` + one alternate (light-friendly) scheme | Theming is expected; light terminals need a good option | M | F-07 | ★ | after F-07 |
 | F-12 | M6/M7 docs closeout (milestones ✅ + manual checks, README crate table, remove `some_file.js`) | Docs must match shipped behavior | S | F-06, F-07–F-11 | ★ | |
-| F-13 | Graceful LSP startup: an auto-started built-in that fails to start → one non-blocking line, no retry for the session; explicit servers keep Neovim's message | A broken server on PATH blocks first launch today (reproduced; Neovim shows the same prompt, but only for servers the user enabled) | S | — | ★ | 📄 |
+| F-13 | Graceful LSP startup: an auto-started built-in that fails to start → one non-blocking line, no retry for the session; explicit servers keep Neovim's message | A broken server on PATH blocks first launch today (reproduced; Neovim shows the same prompt, but only for servers the user enabled) | S | — | ★ | 🚢 #12 |
 | F-14 | Swap files + crash recovery (`-r`, recover prompt) | No-data-loss promise for a public editor | L | F-08 (`'swapfile'`) | ★ | |
 | F-15 | Visual-block mode (`CTRL-V` with `I`/`A`/`c`/`d`/`$`) | Daily Vim feature; 4 failing oracle cases exist | M | F-03 | ★ | |
 | F-16 | `'clipboard'` `unnamed`/`unnamedplus` | The most common vimrc line; `+`/`*` sync already exists | S | F-08 | ★ | |

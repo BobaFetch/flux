@@ -2,10 +2,13 @@
 //! the answers to the requests flux's commands make (`K`, `grr`, …), as Neovim's
 //! `vim.lsp.handlers` and `vim.lsp.buf` do.
 
+use std::path::Path;
+
 use flux_core::Edit;
 use flux_view::Editor;
 use flux_view::lsp::{ClientId, ClientState, Encoding, Outgoing, Pending, from_lsp, uri_to_path};
 use serde_json::{Value, json};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::engine::Engine;
 
@@ -69,18 +72,61 @@ fn message(engine: &mut Engine, editor: &mut Editor, client: ClientId, msg: Valu
     }
 }
 
-/// The server process ended. Like Neovim, an unexpected end is reported.
-pub fn handle_exit(editor: &mut Editor, client: ClientId, why: &str) {
+/// The server process ended. Auto-enabled servers that never initialized warn once; all
+/// other unexpected exits keep Neovim's error message.
+pub fn handle_exit(editor: &mut Editor, client: ClientId, why: &str, log: Option<&Path>) {
     let Some(c) = editor.lsp.client(client) else {
         return;
     };
     let expected = c.state == ClientState::Stopping;
+    let initializing = c.state == ClientState::Initializing;
     let name = c.name.clone();
     editor.lsp_exited(client);
     if !expected {
-        editor.error(format!("Client {name} quit {why}"));
+        if initializing && editor.lsp.auto_enabled.contains(&name) {
+            editor.lsp.enabled.retain(|c| c.name != name);
+            if !editor.lsp.failed.contains(&name) {
+                editor.lsp.failed.push(name);
+                let warning = startup_warning(&editor.lsp.failed, log, editor.screen_size().0);
+                editor.warning_after_waiting(warning);
+            }
+        } else {
+            editor.error(format!("Client {name} quit {why}"));
+        }
     }
     ex_lsp::exited(editor, client);
+}
+
+/// Pick the first warning that fits without wrapping. The fallback cuts by display columns,
+/// never in the middle of a multibyte character.
+fn startup_warning(names: &[String], log: Option<&Path>, width: usize) -> String {
+    let names = names.join(", ");
+    if let Some(log) = log {
+        let text = format!("{names} failed to start; see {}", log.display());
+        if UnicodeWidthStr::width(text.as_str()) < width {
+            return text;
+        }
+    }
+    let text = format!("{names} failed to start; see lsp.log");
+    if UnicodeWidthStr::width(text.as_str()) < width {
+        return text;
+    }
+    let available = width.saturating_sub(1);
+    if available == 0 {
+        return String::new();
+    }
+    let mut short = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let columns = ch.width().unwrap_or(0);
+        if used + columns >= available {
+            break;
+        }
+        short.push(ch);
+        used += columns;
+    }
+    short.push('…');
+    short
 }
 
 fn server_request(editor: &mut Editor, client: ClientId, method: &str, id: Value, params: &Value) {
@@ -342,5 +388,275 @@ fn resource_operation(editor: &mut Editor, kind: &str, op: &Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flux_lsp::ServerConfig;
+    use flux_view::MessageKind;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const WHY: &str = "with exit code 1 and signal 0. Check log for errors: /tmp/x/lsp.log";
+
+    fn setup(width: usize, names: &[&str]) -> (Editor, Vec<ClientId>, PathBuf) {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "flux-lsp-startup-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let mut editor = Editor::new(width, 24);
+        for &name in names {
+            let config = ServerConfig {
+                name: name.into(),
+                cmd: vec!["fake".into()],
+                filetypes: vec!["rust".into()],
+                root_markers: vec![],
+                settings: json!({}),
+                init_options: Value::Null,
+            };
+            editor.lsp.configs.push(config.clone());
+            editor.lsp.enabled.push(config);
+        }
+        editor.open(&file);
+        let ids = editor.lsp.clients.iter().map(|c| c.id).collect();
+        (editor, ids, dir)
+    }
+
+    fn fail(editor: &mut Editor, id: ClientId) {
+        handle_exit(editor, id, WHY, Some(Path::new("/tmp/x/lsp.log")));
+    }
+
+    #[test]
+    fn auto_failure_is_one_line_without_prompt() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        let errors = editor.error_count;
+        fail(&mut editor, ids[0]);
+        assert!(!editor.hit_enter);
+        assert_eq!(editor.error_count, errors);
+        let message = editor.message.as_ref().unwrap();
+        assert_eq!(message.kind, MessageKind::Warning);
+        assert_eq!(message.text, "fake failed to start; see /tmp/x/lsp.log");
+        assert_eq!(editor.lsp.failed, ["fake"]);
+    }
+
+    #[test]
+    fn auto_failure_disables_config_for_session() {
+        let (mut editor, ids, dir) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        fail(&mut editor, ids[0]);
+        assert!(editor.lsp.enabled.is_empty());
+        assert_eq!(editor.lsp.configs.len(), 1);
+        let client_count = editor.lsp.clients.len();
+        editor.lsp.outbox.clear();
+        let other = dir.join("other.rs");
+        std::fs::write(&other, "fn other() {}\n").unwrap();
+        editor.open(&other);
+        assert_eq!(editor.lsp.clients.len(), client_count);
+        assert!(
+            !editor
+                .lsp
+                .outbox
+                .iter()
+                .any(|o| matches!(o, Outgoing::Start { .. }))
+        );
+    }
+
+    #[test]
+    fn two_auto_failures_share_one_line() {
+        let (mut editor, ids, _) = setup(80, &["a", "b"]);
+        editor.lsp.auto_enabled.extend(["a".into(), "b".into()]);
+        fail(&mut editor, ids[0]);
+        fail(&mut editor, ids[1]);
+        assert_eq!(editor.lsp.failed, ["a", "b"]);
+        assert!(
+            editor
+                .message
+                .as_ref()
+                .unwrap()
+                .text
+                .starts_with("a, b failed to start")
+        );
+        assert!(!editor.hit_enter);
+    }
+
+    #[test]
+    fn warning_fits_narrow_screens() {
+        for width in [80, 30, 20, 2, 1] {
+            let (mut editor, ids, _) = setup(width, &["fake"]);
+            editor.lsp.auto_enabled.insert("fake".into());
+            handle_exit(&mut editor, ids[0], WHY, Some(Path::new("/tmp/宽/lsp.log")));
+            let text = &editor.message.as_ref().unwrap().text;
+            assert!(
+                UnicodeWidthStr::width(text.as_str()) < width,
+                "{width}: {text:?}"
+            );
+            assert!(!editor.hit_enter, "{width}: {text:?}");
+            match width {
+                80 => assert_eq!(text, "fake failed to start; see /tmp/宽/lsp.log"),
+                30 | 20 => assert!(text.ends_with('…')),
+                2 => assert_eq!(text, "…"),
+                1 => assert!(text.is_empty()), // Nothing nonempty fits below one column.
+                _ => unreachable!(),
+            }
+        }
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        handle_exit(
+            &mut editor,
+            ids[0],
+            WHY,
+            Some(Path::new(
+                "/a/very/long/directory/name/that/does/not/fit/in/the/screen/lsp.log",
+            )),
+        );
+        assert_eq!(
+            editor.message.unwrap().text,
+            "fake failed to start; see lsp.log"
+        );
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        handle_exit(&mut editor, ids[0], "with error: spawn failed", None);
+        assert_eq!(
+            editor.message.unwrap().text,
+            "fake failed to start; see lsp.log"
+        );
+    }
+
+    #[test]
+    fn explicit_failure_keeps_neovim_message() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        fail(&mut editor, ids[0]);
+        assert_eq!(
+            editor.message.unwrap().text,
+            format!("Client fake quit {WHY}")
+        );
+        assert_eq!(editor.error_count, 1);
+        assert!(editor.hit_enter);
+    }
+
+    #[test]
+    fn running_crash_keeps_neovim_message() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        editor.lsp.client_mut(ids[0]).unwrap().state = ClientState::Running;
+        fail(&mut editor, ids[0]);
+        assert_eq!(
+            editor.message.unwrap().text,
+            format!("Client fake quit {WHY}")
+        );
+        assert_eq!(editor.error_count, 1);
+        assert_eq!(editor.lsp.enabled.len(), 1);
+    }
+
+    #[test]
+    fn waiting_message_is_not_dismissed() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        editor.error("line one\nline two");
+        fail(&mut editor, ids[0]);
+        assert!(editor.hit_enter);
+        let message = editor.message.unwrap();
+        assert_eq!(message.kind, MessageKind::Error);
+        assert_eq!(
+            message.text,
+            "line one\nline two\nfake failed to start; see /tmp/x/lsp.log"
+        );
+        assert_eq!(editor.error_count, 1);
+    }
+
+    #[test]
+    fn lsp_enable_makes_it_explicit() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        fail(&mut editor, ids[0]);
+        crate::ex::execute(&mut editor, ":lsp enable fake");
+        assert_eq!(editor.lsp.enabled.len(), 1);
+        assert!(!editor.lsp.auto_enabled.contains("fake"));
+        assert!(editor.lsp.failed.is_empty());
+        let new = editor.lsp.clients.last().unwrap().id;
+        assert_ne!(new, ids[0]);
+        fail(&mut editor, new);
+        assert!(
+            editor
+                .message
+                .as_ref()
+                .unwrap()
+                .text
+                .starts_with("Client fake quit")
+        );
+    }
+
+    #[test]
+    fn lsp_enable_without_a_name_makes_it_explicit() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        fail(&mut editor, ids[0]);
+        crate::ex::execute(&mut editor, ":lsp enable");
+        assert_eq!(editor.lsp.enabled.len(), 1);
+        assert!(!editor.lsp.auto_enabled.contains("fake"));
+        assert!(editor.lsp.failed.is_empty());
+        assert_eq!(editor.lsp.clients.len(), 2);
+    }
+
+    #[test]
+    fn stopping_during_initialize_is_silent() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        editor.lsp_stop(Some(ids[0]));
+        fail(&mut editor, ids[0]);
+        assert!(editor.message.is_none());
+        assert!(editor.lsp.failed.is_empty());
+        assert_eq!(editor.lsp.enabled.len(), 1);
+    }
+
+    #[test]
+    fn restart_counts_as_explicit() {
+        let (mut editor, ids, _) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        crate::ex::execute(&mut editor, ":lsp restart fake");
+        assert!(!editor.lsp.auto_enabled.contains("fake"));
+        assert_eq!(
+            editor.lsp.client(ids[0]).unwrap().state,
+            ClientState::Stopping
+        );
+        fail(&mut editor, ids[0]);
+        let new = editor.lsp.clients.last().unwrap().id;
+        assert_ne!(new, ids[0]);
+        fail(&mut editor, new);
+        assert!(
+            editor
+                .message
+                .as_ref()
+                .unwrap()
+                .text
+                .starts_with("Client fake quit")
+        );
+    }
+
+    #[test]
+    fn duplicate_auto_failure_warns_only_once() {
+        let (mut editor, ids, dir) = setup(80, &["fake"]);
+        editor.lsp.auto_enabled.insert("fake".into());
+        let other = dir.join("other.rs");
+        std::fs::write(&other, "fn other() {}\n").unwrap();
+        editor.open(&other);
+        // A second root can leave another client of the same config already initializing.
+        // Simulate that client so both exits are handled even after disabling the config.
+        let mut second = editor.lsp.client(ids[0]).unwrap().clone();
+        second.id = ClientId(ids[0].0 + 100);
+        editor.lsp.clients.push(second.clone());
+        fail(&mut editor, ids[0]);
+        editor.message = None;
+        fail(&mut editor, second.id);
+        assert_eq!(editor.lsp.failed, ["fake"]);
+        assert!(editor.message.is_none());
     }
 }

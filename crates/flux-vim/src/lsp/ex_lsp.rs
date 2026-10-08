@@ -81,6 +81,8 @@ fn checked_enable(editor: &mut Editor, names: &[String], enable: bool, errors: &
             continue;
         };
         if enable {
+            editor.lsp.auto_enabled.remove(name);
+            editor.lsp.failed.retain(|failed| failed != name);
             if !editor.lsp.enabled.iter().any(|c| &c.name == name) {
                 editor.lsp.enabled.push(config);
             }
@@ -160,7 +162,10 @@ fn restart(editor: &mut Editor, id: ClientId) {
     let Some(c) = editor.lsp.client(id) else {
         return;
     };
+    let name = c.name.clone();
     let buffers: Vec<_> = c.docs.keys().copied().collect();
+    editor.lsp.auto_enabled.remove(&name);
+    editor.lsp.failed.retain(|failed| failed != &name);
     editor.lsp.restarts.push((id, buffers));
     editor.lsp_stop(Some(id));
 }

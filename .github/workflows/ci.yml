@@ -32,5 +32,10 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Test (NO_COLOR, dumb terminal)
+        env:
+          NO_COLOR: "1"
+          TERM: dumb
+        run: cargo test --workspace
       - name: Licenses and advisories
         uses: EmbarkStudios/cargo-deny-action@v2

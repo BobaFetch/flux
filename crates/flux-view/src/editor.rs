@@ -1013,6 +1013,19 @@ impl Editor {
         self.show(text.into(), MessageKind::Warning);
     }
 
+    /// Keep a message awaiting Enter visible when a later warning arrives.
+    pub fn warning_after_waiting(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        if self.hit_enter
+            && let Some(message) = &mut self.message
+        {
+            message.text.push('\n');
+            message.text.push_str(&text);
+        } else {
+            self.warning(text);
+        }
+    }
+
     /// Register contents, including the read-only `"%` (the file name).
     pub fn register(&self, name: Option<char>) -> Option<crate::Register> {
         if name == Some('%') {
