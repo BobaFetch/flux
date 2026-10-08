@@ -1,7 +1,7 @@
 name: CI
 
-# One Linux job keeps billed minutes low (each job is billed rounded up to a minute). macOS isn't
-# run here; `cargo test --workspace` covers it locally.
+# Tests and clippy run on Linux and macOS; fmt, deny and ShellCheck run on Linux.
+# Standard macOS runners are free for public repositories.
 
 on:
   push:
@@ -18,16 +18,25 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          components: rustfmt, clippy
+      - name: macOS runner
+        if: runner.os == 'macOS'
+        run: |
+          uname -m
+          sw_vers
+      - name: Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup show
+          rustc --version
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
@@ -37,5 +46,19 @@ jobs:
           NO_COLOR: "1"
           TERM: dumb
         run: cargo test --workspace
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: ShellCheck
+        run: shellcheck -s sh .sectorfive/bin/role
+      - name: Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup show
+          rustc --version
+      - name: Format
+        run: cargo fmt --all --check
       - name: Licenses and advisories
         uses: EmbarkStudios/cargo-deny-action@v2

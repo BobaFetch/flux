@@ -1,25 +1,12 @@
 name: Neovim oracle
 
-# Checks that the recorded expectations (oracle cases, the indent corpus, the default
-# colorscheme) still match real Neovim. They can only drift when their inputs or the scripts
-# that record them change, so this runs only then (or by hand).
+# Check the oracle, indent corpus and default colors against pinned Neovim on Linux
+# on every PR and push to main, or by hand.
 
 on:
   push:
     branches: [main]
-    paths:
-      - crates/flux-vim/tests/oracle/**
-      - crates/flux-vim/tests/indent/**
-      - crates/flux-view/src/colors.json
-      - xtask/**
-      - .github/workflows/oracle.yml
   pull_request:
-    paths:
-      - crates/flux-vim/tests/oracle/**
-      - crates/flux-vim/tests/indent/**
-      - crates/flux-view/src/colors.json
-      - xtask/**
-      - .github/workflows/oracle.yml
   workflow_dispatch:
 
 concurrency:
@@ -28,6 +15,7 @@ concurrency:
 
 jobs:
   oracle:
+    name: neovim
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -36,7 +24,10 @@ jobs:
           neovim: true
           # Must match crates/flux-vim/tests/oracle/NVIM_VERSION.
           version: v0.12.5
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - name: Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup show
+          rustc --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask oracle check
       - run: cargo xtask indent check
