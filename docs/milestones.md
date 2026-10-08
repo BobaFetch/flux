@@ -6,8 +6,9 @@ Each milestone ends with a runnable editor and a manual check before the next on
 
 Open a file read-only, move around it, and quit, with screen output matching Neovim.
 
-- Workspace, dual MIT/Apache license, CI (fmt, clippy, tests on Linux and macOS, cargo-deny,
-  Neovim oracle check).
+- Workspace, dual MIT/Apache license, CI on every pull request and push to `main`: clippy and
+  tests on Linux and macOS; fmt, cargo-deny and ShellCheck on Linux; Neovim oracle, indent and
+  colors checks on Linux.
 - Text loading the way Vim counts lines: final newline, `[noeol]`, CRLF (`[dos]`) files, invalid
   UTF-8 flagged.
 - Screen layout: tabs, `^X` / `<hex>` for unprintable characters, wide characters and emoji,
