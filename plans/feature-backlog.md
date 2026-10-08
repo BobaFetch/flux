@@ -9,7 +9,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-03 | Oracle honesty: retag and report deferred cases | 12 `m: 9` cases are silently skipped; 6 already pass; "all 1163 match" is overstated | S | — | ★ | 🚢 #10 |
 | F-04 | Oracle/indent/colors CI on every PR + macOS CI job | Parity is checked only when fixtures change; macOS is untested in CI (now free: public repo) | S | — | ★ | 🚢 #17 |
 | F-05 | Name and packaging decision: **✅ decided Oct 5, 2026.** Command, config path and Lua namespace stay `flux`; package name `flux-editor` | crates.io/Homebrew `flux` names are taken; had to settle before the API namespace and config path freeze | S (decision) | — | ★ | ✅ done |
-| F-06 | Stage B verify and sign-off | Pickers and Tab completion shipped without a recorded gate | S | F-01 | ★ | after F-01 |
+| F-06 | Stage B verify and sign-off | Pickers and Tab completion shipped without a recorded gate | S | F-01 | ★ | 📄 |
 | F-07 | Lua runtime + `init.lua` loading + error handling + `flux.opt` (existing options), `flux.cmd`, `flux.version`, `--clean`/`-u`; reserves the whole `flux.*` surface (spec Appendix A) | Foundation of user config; bad config must never crash | M | F-05 (done) | ★ | 📄 |
 | F-08 | Common config options (`scrolloff`, `wrap`, `list`/`listchars`, `cursorline`, `colorcolumn`, `mouse`, `clipboard`, `swapfile`); `flux.opt` itself moved to F-07 | Users' first config lines currently hit E518 | M | F-07 | ★ | after F-07 |
 | F-09 | `flux.map`/`flux.unmap` keymaps (per mode, non-recursive; `flux.g.mapleader`). **May slip to M8** by plan amendment (`.sectorfive/plans/m7.md:138–141`); names reserved in F-07 Appendix A either way | Keymaps are table stakes. Largest design risk in M7 | L | F-07 | ★ | after F-07 |
@@ -44,7 +44,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | P-04 | M6 leftovers: focusable floats, `:clist`/`:colder`, inlay hints, code lenses | Nice-to-haves | M | — | — | post-1.0 |
 | P-05 | Windows support | No evidence of demand; `cfg(unix)` paths | L | — | — | post-1.0 |
 
-**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-04, F-34 (Oct 7, 2026). F-05 is decided (package `flux-editor`, command `flux`).
+**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-04, F-06, F-34 (Oct 7, 2026). F-05 is decided (package `flux-editor`, command `flux`).
 
 **Next to spec:** F-08, F-10, F-11 and F-09 (F-07's API decisions, including the Appendix A shapes, were settled Oct 6, 2026).
 
