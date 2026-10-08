@@ -7,7 +7,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-01 | Picker respects `.gitignore` and caps fairly | `:Files` misses real files after a build (`target/` fills the 5000 cap; reproduced) | S–M | — | ★ | 🚢 #13 |
 | F-02 | Tests independent of `TERM`/`NO_COLOR` | A `flux-tui` test fails under `NO_COLOR=1`; contributors' and CI environments vary | S | — | ★ | 🚢 #11 |
 | F-03 | Oracle honesty: retag and report deferred cases | 12 `m: 9` cases are silently skipped; 6 already pass; "all 1163 match" is overstated | S | — | ★ | 🚢 #10 |
-| F-04 | Oracle/indent/colors CI on every PR + macOS CI job | Parity is checked only when fixtures change; macOS is untested in CI (now free: public repo) | S | — | ★ | 📄 |
+| F-04 | Oracle/indent/colors CI on every PR + macOS CI job | Parity is checked only when fixtures change; macOS is untested in CI (now free: public repo) | S | — | ★ | 🚢 #17 |
 | F-05 | Name and packaging decision: **✅ decided Oct 5, 2026.** Command, config path and Lua namespace stay `flux`; package name `flux-editor` | crates.io/Homebrew `flux` names are taken; had to settle before the API namespace and config path freeze | S (decision) | — | ★ | ✅ done |
 | F-06 | Stage B verify and sign-off | Pickers and Tab completion shipped without a recorded gate | S | F-01 | ★ | after F-01 |
 | F-07 | Lua runtime + `init.lua` loading + error handling + `flux.opt` (existing options), `flux.cmd`, `flux.version`, `--clean`/`-u`; reserves the whole `flux.*` surface (spec Appendix A) | Foundation of user config; bad config must never crash | M | F-05 (done) | ★ | 📄 |

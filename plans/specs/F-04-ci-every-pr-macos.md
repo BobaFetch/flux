@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-04 (M9 release hardening; PRD FR-Q1, FR-Q2, FR-Q6) |
 | Size | S (≈ half a day, plus fixing whatever macOS surfaces) |
-| Spec status | 📄 Written Oct 7, 2026; open questions resolved by the PM the same day (see Decisions) |
+| Spec status | **Shipped** in #17 (`8514b38`), Oct 7, 2026. Written Oct 7, 2026; open questions resolved by the PM the same day (see Decisions) |
 | Repo state | `BobaFetch/flux` @ `48f5a44` (main), read Oct 7, 2026 |
 | Proposed branch / PR title | `ci-every-pr-macos` / **Run CI on macOS and the Neovim checks on every PR** |
 | Owner | Lightning (`.github/**`, toolchain files per `.sectorfive/ownership.md`) |
