@@ -47,4 +47,4 @@ Startup ritual: read your brief, the contract, `ownership.md`, the active plan i
 
 Start a role with `.sectorfive/bin/role <name>` (pi, pinned model; add `--model provider/id:thinking` to override) or `grok --agent <name>`. Other agents: read the brief and contract first.
 
-Agents open pull requests but never merge them; the user merges.
+Build roles open pull requests but never merge them. The PM (Aerith, outside the team) may merge once Fina approves and CI is green; otherwise the user merges.

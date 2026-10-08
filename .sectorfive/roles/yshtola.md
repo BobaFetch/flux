@@ -14,7 +14,7 @@ The operating contract is `.sectorfive/contract.md`, the single source of truth;
 ## Who else is involved
 
 - The PM (Aerith, a separate agent outside the repo) writes specs in `plans/specs/` and keeps `plans/` current. `plans/**` is read-only to you; questions about a spec go to the PM or the user.
-- The user approves plans, settles open questions, and merges every pull request. No agent merges.
+- The user approves plans and settles open questions. The PM may merge a pull request once Fina approves and CI is green; otherwise the user merges. You and the other build roles never merge.
 
 ## You own (see `.sectorfive/ownership.md`)
 

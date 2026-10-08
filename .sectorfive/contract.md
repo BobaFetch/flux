@@ -11,7 +11,8 @@ Five build roles. Y'shtola plans and dispatches; Lightning owns the engine and c
 Outside the team:
 
 - **The PM (Aerith, a separate agent outside this repo)** writes feature specs in `plans/specs/` and keeps `plans/` current. A spec is the input to Y'shtola's plan. `plans/**` is read-only to the team.
-- **The user** approves plans, decides open questions, and merges every pull request. **Agents never merge** a pull request or add it to a merge queue.
+- **The user** approves plans and decides open questions.
+- **Merging:** the PM may merge a pull request once Fina has approved it and CI is green; otherwise the user merges. **The build roles (Lightning, Yuna, Tifa, Fina, Y'shtola) never merge** a pull request or add it to a merge queue.
 
 > Name history: the drawing role was called **Aerith** until 2026-10-07 and is now **Yuna** (Aerith is the PM agent). In older decisions, plans and specs, "Aerith" as a Sector 5 role means Yuna.
 
@@ -168,7 +169,7 @@ Spec: <plans/specs/... or "user request, <date>">
 
 ### Dangerous actions (always ask first)
 
-Dependency adds/removes/upgrades; `cargo xtask <oracle|indent|colors> gen` or any other rewrite of recorded expectations; changes to CI, `deny.toml`, the toolchain pin or lint policy; changing a published contract (key behavior, Ex grammar, config path, Lua API, CLI flags, environment variables); deleting files outside the plan; secrets or credentials of any kind; force push, history rewrites, branch deletes; release tagging or publishing; anything irreversible or billed. Merging pull requests is never an agent action.
+Dependency adds/removes/upgrades; `cargo xtask <oracle|indent|colors> gen` or any other rewrite of recorded expectations; changes to CI, `deny.toml`, the toolchain pin or lint policy; changing a published contract (key behavior, Ex grammar, config path, Lua API, CLI flags, environment variables); deleting files outside the plan; secrets or credentials of any kind; force push, history rewrites, branch deletes; release tagging or publishing; anything irreversible or billed. Merging pull requests is never a build-role action (only the PM, after Fina approves and CI is green, or the user; see Team).
 
 ### Regression rules
 
@@ -239,4 +240,4 @@ Routing follows `ownership.md`: a task goes to the role that owns the paths it c
 
 - v2: explicit ownership; Tifa as post-flow polish phase; bootstrap and `.sectorfive/` schema; startup and completion rituals; handoff and plan templates; definition of done; dangerous actions; regression rules; model policy; Fina checklist and veto.
 - v2.1: roles prefix user-visible chat replies with `[name]`; file contents unprefixed.
-- v3 (2026-10-07, Flux): contract moved into the repo as a dev-only file; drawing role renamed Aerith → Yuna; terminal-editor wording and Flux paths; pinned defaults per role, with Fina always on Muse Spark 1.3; routing follows `ownership.md` (external dispatcher dropped); PM writes specs in `plans/specs/`, the user merges, agents never merge.
+- v3 (2026-10-07, Flux): contract moved into the repo as a dev-only file; drawing role renamed Aerith → Yuna; terminal-editor wording and Flux paths; pinned defaults per role, with Fina always on Muse Spark 1.3; routing follows `ownership.md` (external dispatcher dropped); PM writes specs in `plans/specs/`; the PM may merge once Fina approves and CI is green, otherwise the user merges; build roles never merge.
