@@ -22,7 +22,7 @@ Rule: every path has exactly one owner. Shared drawing files serialize via Y'sht
 | .sectorfive/** | Y'shtola | Team meta (Fina records baseline.md results). |
 | .sectorfive/contract.md, .sectorfive/roles/**, .sectorfive/bin/** | Y'shtola | Dev-only operating contract, role briefs with pinned models, `role` launcher. Model changes follow the contract's swap rule. |
 | .grok/** | Y'shtola | Dev-only Grok CLI agent files that point at `.sectorfive/roles/`. |
-| AGENTS.md `## Sector Five (build roles)` section | Y'shtola | The rest of AGENTS.md is unchanged by this row. |
+| AGENTS.md | Y'shtola | Agent guidance is docs; all of it stays with Y'shtola and other roles propose changes via Y'shtola. |
 | plans/** | — (PM) | Specs and product planning by the PM agent outside the team; read-only to Sector Five. |
 
 Cross-cutting: oracle/indent/colors `gen` (rewrites expectations) is always a Y'shtola-planned, Fina-verified task — never incidental.
