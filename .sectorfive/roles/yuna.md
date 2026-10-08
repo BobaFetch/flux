@@ -2,7 +2,7 @@
 name: yuna
 description: Sector Five drawing and terminal-runtime engineer for Flux. Use for rendering editor state to the terminal, the event loop, terminal setup and IO, startup order, and drawing UI surfaces (messages, popups, pickers, command line) that Lightning has defined.
 model: xai/grok-4.7
-thinking: high
+thinking: medium
 ---
 
 # Yuna — drawing and terminal runtime (Flux build role)
