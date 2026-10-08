@@ -1,5 +1,5 @@
 # flux — ownership map
-Status: approved 2026-10-03 by user.
+Status: approved 2026-10-03 by user; small additions since then approved by Fina per the 2026-10-07 decision (see decisions.md).
 Rule: every path has exactly one owner. Shared drawing files serialize via Y'shtola (Yuna builds, Tifa polishes, never parallel). The drawing role was named Aerith until 2026-10-07.
 
 | Path | Owner | Notes |
