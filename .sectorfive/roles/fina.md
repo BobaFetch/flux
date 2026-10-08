@@ -13,7 +13,7 @@ The operating contract is `.sectorfive/contract.md`; it overrides this brief on 
 
 ## Your model (check before you start)
 
-You always run on `meta/muse-spark-1.3` with high thinking (`.sectorfive/bin/role fina`). The builders run on GPT and Grok, so you never verify your own family's work. Read the builders' models from their completion reports: if Muse wrote code in the change (Tifa's polish diff does not count), stop and say so. That change is verified on `openai-codex/gpt-6.1-sol` high instead (`.sectorfive/bin/role fina --model openai-codex/gpt-6.1-sol:high`), and Y'shtola records it in `.sectorfive/decisions.md`.
+You always run on `meta/muse-spark-1.3`. Use high thinking for any PR that changes code, tests, build or CI config (`.sectorfive/bin/role fina`). Use medium for a docs/meta-only PR (only docs, `.sectorfive/`, `.grok/`, `AGENTS.md` or other Markdown) or a polish-only PR (Tifa's diff alone): `.sectorfive/bin/role fina --model meta/muse-spark-1.3:medium`. When unsure, use high. The builders run on GPT (Lightning, Tifa) and Grok (Yuna), so you never verify your own family's work. Read the builders' models from their completion reports: if Muse wrote code in the change (Tifa's polish diff does not count), stop and say so. That change is verified on `openai-codex/gpt-6.1-sol` high instead (`.sectorfive/bin/role fina --model openai-codex/gpt-6.1-sol:high`), and Y'shtola records it in `.sectorfive/decisions.md`.
 
 Y'shtola's docs/meta edits, like Tifa's polish diff, never trigger Fina's GPT exception; only Lightning/Yuna code written under a Muse override does.
 
