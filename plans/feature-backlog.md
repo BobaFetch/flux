@@ -7,7 +7,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-01 | Picker respects `.gitignore` and caps fairly | `:Files` misses real files after a build (`target/` fills the 5000 cap; reproduced) | S–M | — | ★ | 🚢 #13 |
 | F-02 | Tests independent of `TERM`/`NO_COLOR` | A `flux-tui` test fails under `NO_COLOR=1`; contributors' and CI environments vary | S | — | ★ | 🚢 #11 |
 | F-03 | Oracle honesty: retag and report deferred cases | 12 `m: 9` cases are silently skipped; 6 already pass; "all 1163 match" is overstated | S | — | ★ | 🚢 #10 |
-| F-04 | Oracle/indent/colors CI on every PR + macOS CI job | Parity is checked only when fixtures change; macOS is untested in CI (now free: public repo) | S | — | ★ | ✅ |
+| F-04 | Oracle/indent/colors CI on every PR + macOS CI job | Parity is checked only when fixtures change; macOS is untested in CI (now free: public repo) | S | — | ★ | 📄 |
 | F-05 | Name and packaging decision: **✅ decided Oct 5, 2026.** Command, config path and Lua namespace stay `flux`; package name `flux-editor` | crates.io/Homebrew `flux` names are taken; had to settle before the API namespace and config path freeze | S (decision) | — | ★ | ✅ done |
 | F-06 | Stage B verify and sign-off | Pickers and Tab completion shipped without a recorded gate | S | F-01 | ★ | after F-01 |
 | F-07 | Lua runtime + `init.lua` loading + error handling + `flux.opt` (existing options), `flux.cmd`, `flux.version`, `--clean`/`-u`; reserves the whole `flux.*` surface (spec Appendix A) | Foundation of user config; bad config must never crash | M | F-05 (done) | ★ | 📄 |
@@ -44,8 +44,8 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | P-04 | M6 leftovers: focusable floats, `:clist`/`:colder`, inlay hints, code lenses | Nice-to-haves | M | — | — | post-1.0 |
 | P-05 | Windows support | No evidence of demand; `cfg(unix)` paths | L | — | — | post-1.0 |
 
-**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-34 (Oct 7, 2026). F-05 is decided (package `flux-editor`, command `flux`).
+**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-04, F-34 (Oct 7, 2026). F-05 is decided (package `flux-editor`, command `flux`).
 
-**Next to spec:** F-04 (ready now; it was marked ready but left out of this note before, and it matters most for reviewing outside PRs), then F-08, F-10, F-11 and F-09 (F-07's API decisions, including the Appendix A shapes, were settled Oct 6, 2026).
+**Next to spec:** F-08, F-10, F-11 and F-09 (F-07's API decisions, including the Appendix A shapes, were settled Oct 6, 2026).
 
 **Stage C split** (per `.sectorfive/plans/m7.md:138–141`): F-07 (runtime, `init.lua`, `flux.opt`/`cmd`/`version`, flags) → F-08 (new options) ∥ F-10 (`flux.lsp`) ∥ F-11 (colors) ∥ F-09 (maps). Each is a separately mergeable PR. F-09 is the one the plan allows to slip to M8; if it slips, record the amendment in `.sectorfive/decisions.md`.
