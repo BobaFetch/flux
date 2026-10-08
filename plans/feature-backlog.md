@@ -16,7 +16,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-10 | `flux.lsp.config`/`flux.lsp.enable` (replaces `$FLUX_LSP_CONFIG` for users; explicit enable feeds F-13's flag) | Users must add or adjust servers without env vars | S–M | F-07 | ★ | after F-07 |
 | F-11 | `:colorscheme` + `:highlight` + `flux.highlight` + one alternate (light-friendly) scheme | Theming is expected; light terminals need a good option | M | F-07 | ★ | after F-07 |
 | F-12 | M6/M7 docs closeout (milestones ✅ + manual checks, README crate table, remove `some_file.js`) | Docs must match shipped behavior | S | F-06, F-07–F-11 | ★ | |
-| F-13 | Graceful LSP startup: an auto-started built-in that fails to start → one non-blocking line, no retry for the session; explicit servers keep Neovim's message | A broken server on PATH blocks first launch today (reproduced; Neovim shows the same prompt, but only for servers the user enabled) | S | — | ★ | 📄 |
+| F-13 | Graceful LSP startup: an auto-started built-in that fails to start → one non-blocking line, no retry for the session; explicit servers keep Neovim's message | A broken server on PATH blocks first launch today (reproduced; Neovim shows the same prompt, but only for servers the user enabled) | S | — | ★ | 🚢 #12 |
 | F-14 | Swap files + crash recovery (`-r`, recover prompt) | No-data-loss promise for a public editor | L | F-08 (`'swapfile'`) | ★ | |
 | F-15 | Visual-block mode (`CTRL-V` with `I`/`A`/`c`/`d`/`$`) | Daily Vim feature; 4 failing oracle cases exist | M | F-03 | ★ | |
 | F-16 | `'clipboard'` `unnamed`/`unnamedplus` | The most common vimrc line; `+`/`*` sync already exists | S | F-08 | ★ | |
