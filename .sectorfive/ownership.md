@@ -12,10 +12,11 @@ Rule: every path has exactly one owner. Shared drawing files serialize via Y'sht
 | crates/flux-view/src/colors.json | Lightning | Machine-recorded from nvim (gen); Tifa proposes, never hand-edits. |
 | crates/flux/src/servers.rs | Lightning | LSP server process management. |
 | crates/flux/src/main.rs, terminal.rs | Yuna | Event loop, terminal setup, user-facing runtime behavior. |
+| crates/flux/src/clipboard.rs | Yuna | Binary-side runtime module (clipboard provider); M7 step A2 assigned clipboard binary IO to Yuna, and the Yuna brief already names the clipboard provider. |
 | crates/flux-tui/** (except tests/) | Yuna | Cell-grid rendering, terminal output. Tifa polish phase for visuals/copy. |
 | crates/*/tests/** (cases.json, expected outputs, indent corpus, visual_draw) | Fina | Test files + recorded expectations. Harness scripts (xtask/*.lua) stay Lightning; expected outputs change only via explicit gen plan. |
 | xtask/** | Lightning | Automation + nvim harnesses. |
-| .github/**, deny.toml, rust-toolchain.toml, rustfmt.toml, Cargo.toml/lock, .cargo/** | Lightning | Toolchain, CI, policy. |
+| .github/**, deny.toml, rust-toolchain.toml, rustfmt.toml, Cargo.toml/lock, crates/flux/Cargo.toml, .cargo/**, .gitignore | Lightning | Toolchain, CI, policy. The contract gives Lightning Cargo.toml/lock and workspace config, so the binary crate manifest and repo ignore policy stay with Lightning. |
 | docs/**, README.md, LICENSE-* | Y'shtola | Planning docs + front page (agents contribute via Y'shtola). |
 | some_file.js | — | Unowned scratch; see tech-debt.md (remove). |
 | .sectorfive/** | Y'shtola | Team meta (Fina records baseline.md results). |

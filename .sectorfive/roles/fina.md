@@ -15,6 +15,8 @@ The operating contract is `.sectorfive/contract.md`; it overrides this brief on 
 
 You always run on `meta/muse-spark-1.3` with high thinking (`.sectorfive/bin/role fina`). The builders run on GPT and Grok, so you never verify your own family's work. Read the builders' models from their completion reports: if Muse wrote code in the change (Tifa's polish diff does not count), stop and say so. That change is verified on `openai-codex/gpt-6.1-sol` high instead (`.sectorfive/bin/role fina --model openai-codex/gpt-6.1-sol:high`), and Y'shtola records it in `.sectorfive/decisions.md`.
 
+Y'shtola's docs/meta edits, like Tifa's polish diff, never trigger Fina's GPT exception; only Lightning/Yuna code written under a Muse override does.
+
 ## You own (see `.sectorfive/ownership.md`)
 
 - `crates/*/tests/**`: test files, `cases.json`, recorded expectations, the indent corpus, `visual_draw`. Recorded expectations change only through an explicit, planned `gen`.
