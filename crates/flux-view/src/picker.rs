@@ -41,6 +41,8 @@ pub struct Picker {
     shown: Vec<usize>,
     /// The selection, as an index into `shown`.
     pub selected: usize,
+    /// `:Files` cut the list (the cap or the walk ceiling). `:Buffers` stays false.
+    pub truncated: bool,
 }
 
 impl Picker {
@@ -53,11 +55,18 @@ impl Picker {
             pos: 0,
             shown,
             selected: 0,
+            truncated: false,
         }
     }
 
     pub fn files(paths: Vec<PathBuf>) -> Self {
-        Self::new(
+        Self::files_truncated(paths, false)
+    }
+
+    /// `:Files` entries. `truncated` is set when the walk hit its cap or ceiling.
+    /// A non-UTF-8 name is shown lossy; `PickerValue::File` keeps the real path.
+    pub fn files_truncated(paths: Vec<PathBuf>, truncated: bool) -> Self {
+        let mut picker = Self::new(
             PickerKind::Files,
             paths
                 .into_iter()
@@ -66,7 +75,9 @@ impl Picker {
                     value: PickerValue::File(p),
                 })
                 .collect(),
-        )
+        );
+        picker.truncated = truncated;
+        picker
     }
 
     /// An initial query (from `:Files query`): filters at once.
@@ -171,6 +182,11 @@ impl Picker {
         self.shown.len()
     }
 
+    /// Entries held before filtering. The truncation marker uses this count.
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
     /// The entries matching `input`, best first.
     pub fn shown_entries(&self) -> Vec<&PickerEntry> {
         self.shown.iter().map(|&i| &self.entries[i]).collect()
@@ -253,6 +269,31 @@ mod tests {
         p.clear_before();
         assert!(p.input.is_empty());
         assert_eq!(p.shown_count(), 4);
+    }
+
+    #[test]
+    fn files_records_whether_the_list_was_truncated() {
+        let full = Picker::files(vec![PathBuf::from("a.txt")]);
+        assert!(!full.truncated);
+        assert_eq!(full.entry_count(), 1);
+        let cut = Picker::files_truncated(vec![PathBuf::from("a.txt")], true);
+        assert!(cut.truncated);
+        assert_eq!(cut.entry_count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_entry_keeps_a_non_utf8_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(std::ffi::OsString::from_vec(vec![0xff, b'.', b't']));
+        let picker = Picker::files(vec![path.clone()]);
+        let entry = picker.selected_entry().unwrap();
+        assert_eq!(entry.text, path.to_string_lossy());
+        match &entry.value {
+            PickerValue::File(kept) => assert_eq!(kept, &path),
+            other => panic!("expected a file path, got {other:?}"),
+        }
     }
 
     #[test]

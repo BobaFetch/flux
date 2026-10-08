@@ -4,7 +4,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 
 | ID | Title | Why (one line) | Size | Depends on | ★ | Ready |
 |---|---|---|---|---|---|---|
-| F-01 | Picker respects `.gitignore` and caps fairly | `:Files` misses real files after a build (`target/` fills the 5000 cap; reproduced) | S–M | — | ★ | 📄 |
+| F-01 | Picker respects `.gitignore` and caps fairly | `:Files` misses real files after a build (`target/` fills the 5000 cap; reproduced) | S–M | — | ★ | 🚢 #13 |
 | F-02 | Tests independent of `TERM`/`NO_COLOR` | A `flux-tui` test fails under `NO_COLOR=1`; contributors' and CI environments vary | S | — | ★ | 🚢 #11 |
 | F-03 | Oracle honesty: retag and report deferred cases | 12 `m: 9` cases are silently skipped; 6 already pass; "all 1163 match" is overstated | S | — | ★ | 🚢 #10 |
 | F-04 | Oracle/indent/colors CI on every PR + macOS CI job | Parity is checked only when fixtures change; macOS is untested in CI (now free: public repo) | S | — | ★ | ✅ |
@@ -37,13 +37,14 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-31 | CONTRIBUTING guide | Outside contributors after a public launch | S | F-04, F-23 | ★ | |
 | F-32 | 0.9 dry-run release on clean runners | Prove S1/S4 before 1.0 | S | F-25, F-26, F-13 | ★ | |
 | F-33 | 1.0 RC with outside testers → 1.0.0 | Real-user validation | M | all ★ | ★ | |
+| F-34 | Quickfix unit tests get their own temp folders (CI flake) | `quickfix::tests::going_through_the_list` races `the_quickfix_window` over one `flux-qf-<pid>` folder; failed CI on main at `97e6ba5` and `1a4ad7d` | XS | — | ★ | 📄 |
 | P-01 | Opt-in LSP auto-completion while typing | Requested in milestones.md M7; not Vim default | M | F-07 | — | post-1.0 |
 | P-02 | Tab pages; `\|` between commands; persistent undo; `q:` | Common but not day-one | M each | — | — | post-1.0 |
 | P-03 | Autocmds, user commands, plugin loading | Ecosystem; out of 1.0 scope | L | F-07 | — | post-1.0 |
 | P-04 | M6 leftovers: focusable floats, `:clist`/`:colder`, inlay hints, code lenses | Nice-to-haves | M | — | — | post-1.0 |
 | P-05 | Windows support | No evidence of demand; `cfg(unix)` paths | L | — | — | post-1.0 |
 
-**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026). F-05 is decided (package `flux-editor`, command `flux`).
+**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-34 (Oct 7, 2026). F-05 is decided (package `flux-editor`, command `flux`).
 
 **Next to spec:** F-04 (ready now; it was marked ready but left out of this note before, and it matters most for reviewing outside PRs), then F-08, F-10, F-11 and F-09 (F-07's API decisions, including the Appendix A shapes, were settled Oct 6, 2026).
 

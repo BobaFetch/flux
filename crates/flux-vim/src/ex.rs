@@ -1443,8 +1443,8 @@ fn list_buffers(editor: &mut Editor, a: &Args) {
 
 /// `:Files [query]`: fuzzy file picker over the working directory.
 fn files_picker(editor: &mut Editor, a: &Args) {
-    let paths = flux_view::explorer::walk_files(&editor.cwd, 5000);
-    let mut picker = flux_view::Picker::files(paths);
+    let walked = flux_view::explorer::walk_files(&editor.cwd, flux_view::explorer::FILES_CAP);
+    let mut picker = flux_view::Picker::files_truncated(walked.paths, walked.truncated);
     picker.set_query(a.args.trim());
     editor.wildmenu = None;
     editor.picker = Some(picker);
