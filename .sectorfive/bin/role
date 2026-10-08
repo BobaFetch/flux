@@ -1,0 +1,136 @@
+#!/bin/sh
+# Start a Sector Five build role in pi. Dev-only: used to build Flux, never shipped.
+# See .sectorfive/contract.md and .sectorfive/roles/.
+set -eu
+
+usage() {
+	cat <<'USAGE'
+usage: .sectorfive/bin/role <name> [pi args...]
+       .sectorfive/bin/role --dry-run <name> [pi args...]
+       .sectorfive/bin/role --list
+
+Starts pi with the role's pinned model and thinking level (from the
+frontmatter of .sectorfive/roles/<name>.md) and appends that brief to the
+system prompt. Pass --model provider/id[:thinking] to run the role on
+another model; the swap rule in .sectorfive/contract.md applies to
+changing a default.
+USAGE
+}
+
+die() {
+	printf 'role: %s\n' "$*" >&2
+	exit 2
+}
+
+# The checkout this script lives in, else the one around the current directory.
+root=$(git -C "$(dirname -- "$0")" rev-parse --show-toplevel 2>/dev/null) || root=
+if [ -z "$root" ] || [ ! -d "$root/.sectorfive/roles" ]; then
+	root=$(git rev-parse --show-toplevel 2>/dev/null) || die "run this inside a Flux checkout"
+fi
+roles_dir="$root/.sectorfive/roles"
+[ -d "$roles_dir" ] || die "missing .sectorfive/roles in $root"
+
+# field FILE KEY: value of a top-level KEY in FILE's YAML frontmatter.
+field() {
+	awk -v key="$2" '
+		NR == 1 { if ($0 != "---") exit; next }
+		$0 == "---" { exit }
+		index($0, key ":") == 1 {
+			v = substr($0, length(key) + 2)
+			sub(/^[ \t]+/, "", v)
+			sub(/[ \t]+$/, "", v)
+			gsub(/^["\047]|["\047]$/, "", v)
+			print v
+			exit
+		}' "$1"
+}
+
+role_names() {
+	for f in "$roles_dir"/*.md; do
+		[ -f "$f" ] && basename "$f" .md
+	done
+}
+
+unknown() {
+	die "unknown role '$1' (known: $(role_names | tr '\n' ' ' | sed 's/ $//'))"
+}
+
+list_roles() {
+	for name in $(role_names); do
+		f="$roles_dir/$name.md"
+		printf '%-10s %s:%s\n' "$name" "$(field "$f" model)" "$(field "$f" thinking)"
+	done
+}
+
+# quote ARG: ARG quoted for a POSIX shell when needed (used by --dry-run).
+quote() {
+	case $1 in
+	'' | *[!A-Za-z0-9_./:=+,-]*)
+		printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+		;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+dry_run=0
+case ${1-} in
+'')
+	usage >&2
+	exit 2
+	;;
+-h | --help)
+	usage
+	exit 0
+	;;
+--list)
+	list_roles
+	exit 0
+	;;
+--dry-run)
+	dry_run=1
+	shift
+	;;
+esac
+
+[ $# -gt 0 ] || die "missing role name (try --list)"
+name=$1
+shift
+case $name in
+'' | *[!a-z0-9-]*) unknown "$name" ;;
+esac
+role_file="$roles_dir/$name.md"
+[ -f "$role_file" ] || unknown "$name"
+
+# Respect a --model the caller passed; otherwise use the pinned default.
+override=0
+for arg in "$@"; do
+	case $arg in
+	--) break ;;
+	--model | --model=*)
+		override=1
+		break
+		;;
+	esac
+done
+
+if [ "$override" -eq 0 ]; then
+	model=$(field "$role_file" model)
+	thinking=$(field "$role_file" thinking)
+	[ -n "$model" ] || die "$role_file has no 'model' in its frontmatter"
+	[ -z "$thinking" ] || model="$model:$thinking"
+	set -- --model "$model" --append-system-prompt "$role_file" "$@"
+else
+	set -- --append-system-prompt "$role_file" "$@"
+fi
+
+if [ "$dry_run" -eq 1 ]; then
+	printf 'pi'
+	for arg in "$@"; do
+		printf ' %s' "$(quote "$arg")"
+	done
+	printf '\n'
+	exit 0
+fi
+
+command -v pi >/dev/null 2>&1 || die "pi is not on PATH"
+exec pi "$@"
