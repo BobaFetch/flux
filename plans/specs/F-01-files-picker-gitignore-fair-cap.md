@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-01 (M7 finish), blocks F-06 Stage B sign-off |
 | Size | M (≈ 1–2 days agent time) |
-| Spec status | **Ready to implement.** Owner approved the `ignore` dependency on Oct 5, 2026 as an explicit exception to the M7 plan's no-new-deps rule |
+| Spec status | **Shipped** in #13 (`9beb77d`), Oct 7, 2026. Owner approved the `ignore` dependency on Oct 5, 2026 as an explicit exception to the M7 plan's no-new-deps rule |
 | Repo state | `BobaFetch/flux` @ `27f9a2a` (main), read Oct 5, 2026 |
 | Proposed branch / PR title | `files-picker-gitignore` / **Respect .gitignore in :Files and share its file cap fairly** |
 | Sector 5 routing | Lightning (walk, picker state, deps, unit tests) → Aerith (truncation marker render) → Tifa (marker copy) → Fina (verify). Docs via Y'shtola. |
@@ -89,7 +89,9 @@ The existing unit test `walk_lists_relative_skips_hidden_and_caps` (`explorer.rs
 **Surface**
 - **R8. Truncation marker.**
   - The walk reports whether it truncated (by cap or ceiling), and the `Picker` carries that flag.
-  - When truncated, the picker's prompt row shows `<listed>+` right-aligned in the `Pmenu` style, for example `5000+`. Tifa may adjust the copy; the spec only requires that truncation is visible.
+  - When truncated, the picker's prompt row shows `<listed>+` right-aligned in the `Pmenu` style, for example `5000+`, whenever it fits beside the `Files> ` label, the full query and the cursor cell.
+  - When there is no room, the marker is left out: never shortened and never drawn over the query or the cursor. It comes back once there is room again, for example when the query gets shorter.
+  - Tifa may adjust the copy; the spec only requires that truncation is visible whenever there is room.
   - Nothing is shown when the list is complete.
   - The `Files> ` label, the prompt text and the cursor position are unchanged.
 - **R9.** The cap stays 5,000, as a named constant (for example `FILES_CAP`) instead of the literal at `ex.rs:1446`.
@@ -128,7 +130,7 @@ The existing unit test `walk_lists_relative_skips_hidden_and_caps` (`explorer.rs
 | A2 | Same session, `<C-u>` to clear the query | No truncation marker (about 646 entries, all tracked non-hidden files) |
 | A3 | `mkdir -p /tmp/fair/{big,small} && for i in $(seq 1 6000); do : > /tmp/fair/big/f$i; done && touch /tmp/fair/small/{a,b,c} && cd /tmp/fair && <flux> .` then `:Files` | Marker `5000+` shown; `:Files small/` matches `small/a`, `small/b`, `small/c` |
 | A4 | `cargo test -p flux-view explorer` | New and updated tests pass (§8) |
-| A5 | `cargo test -p flux-vim pickers` and `cargo test -p flux-tui picker` | Pass |
+| A5 | `cargo test -p flux-vim --lib picker` and `cargo test -p flux-tui picker` | Pass |
 | A6 | `cargo tree -p flux-view -e normal -i ignore` | Shows `ignore v0.4.x` used only by `flux-view` |
 | A7 | `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` (verified in a scratch copy: adding `ignore 0.4.33` adds 9 crates, all MIT, Apache-2.0 or Unlicense; no new warnings) |
 | A8 | CI gates (§12) | Green |
