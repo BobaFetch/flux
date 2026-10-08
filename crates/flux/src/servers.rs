@@ -40,8 +40,11 @@ impl Servers {
     }
 
     /// Send the documents' changes and whatever else the editor has for the servers.
-    pub fn flush(&mut self, editor: &mut Editor) {
+    /// Returns whether a spawn failed synchronously, so the caller can draw its warning
+    /// without waiting for another terminal or server event.
+    pub fn flush(&mut self, editor: &mut Editor) -> bool {
         editor.lsp_sync();
+        let mut spawn_failed = false;
         for out in std::mem::take(&mut editor.lsp.outbox) {
             match out {
                 Outgoing::Start { client, cmd, cwd } => {
@@ -56,7 +59,13 @@ impl Servers {
                             self.running.insert(client, server);
                         }
                         Err(e) => {
-                            flux_vim::lsp::handle_exit(editor, client, &format!("with error: {e}"))
+                            flux_vim::lsp::handle_exit(
+                                editor,
+                                client,
+                                &format!("with error: {e}"),
+                                self.log.as_deref(),
+                            );
+                            spawn_failed = true;
                         }
                     }
                 }
@@ -76,6 +85,7 @@ impl Servers {
                 }
             }
         }
+        spawn_failed
     }
 
     /// Hand a server's event to the engine.
@@ -91,7 +101,7 @@ impl Servers {
                     Some(log) => format!("{why}. Check log for errors: {}", log.display()),
                     None => why,
                 };
-                flux_vim::lsp::handle_exit(editor, ClientId(id.0), &why);
+                flux_vim::lsp::handle_exit(editor, ClientId(id.0), &why, self.log.as_deref());
             }
         }
     }
@@ -104,7 +114,7 @@ impl Servers {
         rx: &mut mpsc::UnboundedReceiver<Event>,
     ) {
         editor.lsp_stop(None);
-        self.flush(editor);
+        let _ = self.flush(editor);
         let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
         while editor
             .lsp
@@ -115,7 +125,7 @@ impl Servers {
             match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(Some(event)) => {
                     self.handle(event, editor, engine);
-                    self.flush(editor);
+                    let _ = self.flush(editor);
                 }
                 _ => break,
             }
