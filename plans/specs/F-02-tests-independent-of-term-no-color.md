@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-02 (M7 finish / quality gates) |
 | Size | S (≈ half a day) |
-| Spec status | **Ready to implement.** Decided by the owner on Oct 5, 2026: flux ignores `NO_COLOR` (like Neovim) |
+| Spec status | **Shipped** in #11 (`9465d05`), Oct 6, 2026. Decided by the owner on Oct 5, 2026: flux ignores `NO_COLOR` (like Neovim) |
 | Repo state | `BobaFetch/flux` @ `27f9a2a` (main), read Oct 5, 2026 |
 | Proposed branch / PR title | `tests-no-color` / **Keep colors and tests independent of NO_COLOR and TERM** |
 | Sector 5 routing | Aerith (`crates/flux-tui/**`, `crates/flux/src/main.rs`) → Lightning (`.github/workflows/ci.yml`) → Fina (verify). Docs via Y'shtola. Tifa not needed (no copy) |

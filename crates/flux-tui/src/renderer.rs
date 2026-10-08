@@ -12,9 +12,18 @@ use crossterm::terminal::{BeginSynchronizedUpdate, Clear, ClearType, EndSynchron
 
 use crate::grid::{Color, Grid, Style};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Renderer {
     previous: Option<Grid>,
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        // F-02: crossterm suppresses color commands when NO_COLOR is set; flux always
+        // draws colors so selections and statuslines remain visible.
+        crossterm::style::force_color_output(true);
+        Self { previous: None }
+    }
 }
 
 impl Renderer {
@@ -203,6 +212,27 @@ mod tests {
         let out = frame(&mut renderer, &grid);
         assert!(out.contains("ab"), "{out:?}");
         assert!(out.contains("48;2;1;2;3"), "{out:?}");
+    }
+
+    #[test]
+    fn colors_are_written_whatever_the_environment() {
+        let mut renderer = Renderer::default();
+        let mut grid = Grid::new(2, 1);
+        grid.put_str(
+            0,
+            0,
+            "R",
+            Style {
+                fg: Color::Rgb(4, 5, 6),
+                bg: Color::Rgb(7, 8, 9),
+                ..Style::default()
+            },
+        );
+        grid.put_str(1, 0, "A", Style::fg(Color::Ansi(1)));
+        let out = frame(&mut renderer, &grid);
+        assert!(out.contains("38;2;4;5;6"), "{out:?}");
+        assert!(out.contains("48;2;7;8;9"), "{out:?}");
+        assert!(out.contains("38;5;1"), "{out:?}");
     }
 
     #[test]

@@ -30,6 +30,9 @@ A built-in language server that fails to start is reported once on one line and 
 this session; `:lsp enable <name>` retries it. Server errors are logged to
 `~/.local/state/flux/lsp.log` (or `$XDG_STATE_HOME/flux/lsp.log` when set).
 
+flux ignores `NO_COLOR`, like Neovim. Its screen relies on color for information such as the
+Visual selection and the statusline, and it has no monochrome mode.
+
 ## Checking behavior against Neovim
 
 `crates/flux-vim/tests/oracle/cases.json` lists key sequences, each tagged with the milestone
