@@ -4,7 +4,7 @@
 - Model: `meta/muse-spark-1.3` high.
 - Heads: first pass 2026-10-15 VETO on `1726eb7`; re-verify 2026-10-16 APPROVE on `main @ d0340e9` (PR #20 squash-merge).
 - Spec: `plans/specs/F-06-stage-b-sign-off.md` (R7 record). No product code, tests, or recorded expectations change in this PR.
-- Raw captures: `target/fina-f06-stage-b/` (78 files, gitignored) starting at `00-verdict.md`. This file summarizes; it does not copy raw captures.
+- Raw captures: `target/fina-f06-stage-b/` (79 files, gitignored) starting at `00-verdict.md`. This file summarizes; it does not copy raw captures.
 - Open-question defaults applied: Tifa B3 skipped (copy issues become follow-ups); unspecified picker behavior recorded as-is (non-blocking); user hands-on taken as input, not as verification.
 
 ## R1 gates (A1) — all PASS
