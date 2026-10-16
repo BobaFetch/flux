@@ -4,7 +4,7 @@
 |---|---|
 | Backlog | F-06 (M7 finish; PRD "Stage B sign-off", `plans/flux-1.0-prd.md:45`) |
 | Size | S (about half a day of verification; fixes, if any, are separate items) |
-| Spec status | 📄 Written Oct 7, 2026 |
+| Spec status | **Shipped** Oct 16, 2026: Fina approved Stage B on main `d0340e9`; evidence in #21 (`ca8088d`), B1 picker fix in #20 (`d0340e9`). Written Oct 7, 2026 |
 | Repo state | `BobaFetch/flux` @ `55b2313` (main), read Oct 7, 2026 |
 | Kind | **Verification and record-keeping, not a feature.** No product code is expected to change |
 | Owner | Fina (verification gate, plan step B4 in `.sectorfive/plans/m7.md`). Y'shtola records the verdict and the evidence (`.sectorfive/**`) |
