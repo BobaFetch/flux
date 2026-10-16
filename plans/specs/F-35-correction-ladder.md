@@ -54,7 +54,7 @@ When a check lands that enforces a rule, the matching prose in `AGENTS.md` / con
 
 | # | Rule today (where) | Today's layer | Target layer | Proposed check (described, not coded) | Owner | Priority |
 |---|---|---|---|---|---|---|
-| C1 | Pickers paint only their own box; no buffer text bleeds through (Fina F-06 veto B1) | 4 (Fina) | 2 | Screen/snapshot test of `:Files` over a buffer full of text at **80×24 and 40×12**: every cell outside the picker's box equals the underlying window's cells, every cell inside belongs to the picker; also a `cargo xtask screens` case `picker-files.txt` vs Neovim/fzf layout. Fails on any row like `liFiles>` | Yuna (Fina writes expected cells) | P0 (blocks F-06) |
+| C1 | Pickers paint only their own box; no buffer text bleeds through (Fina F-06 veto B1) | 4 (Fina) | 2 | Screen/snapshot test of `:Files` over a buffer full of text at **80×24 and 40×12**: every cell outside the picker's box equals the underlying window's cells, every cell inside belongs to the picker; also a `cargo xtask screens` case `picker-files.txt` vs Neovim/fzf layout. Fails on any row like `liFiles>` | Yuna, in her standalone F-06 B1 fix PR, not in F-35 (Fina writes expected cells) | P0 (blocks F-06) |
 | C2 | Same for `:Buffers` and any other float (hover, diag float, completion menu) | 4 | 2 | Generalize C1 into a reusable "float over filled buffer" assertion in `flux-tui` tests, run for every float kind at both sizes | Yuna | P1 |
 | C3 | `flux-core` has no IO (AGENTS.md Architecture) | 3 | 1/2 | Dependency check in xtask (`cargo xtask arch`): `flux-core` may not depend on `std::fs`/`std::process`/`std::net` users or on IO crates; grep-based deny of `std::fs`, `std::process`, `std::net` in `crates/flux-core/src` | Lightning | P1 |
 | C4 | Crate layering (`flux-tui` doesn't reach into `flux-vim` key semantics; LSP split across `flux-lsp` / `flux-view::lsp` / `flux-vim::lsp` / `servers.rs`) | 3 | 1/2 | `cargo xtask arch` reads `cargo metadata` and fails on any edge not in an allowed crate-dependency table checked into xtask | Lightning | P1 |
@@ -67,7 +67,7 @@ When a check lands that enforces a rule, the matching prose in `AGENTS.md` / con
 | C11 | Tifa never changes behavior (polish only) | 4 | 2 (partial) | CI job on Tifa PRs: full test + oracle + screens must pass with **no** expected-output changes except screens/string snapshots listed in the plan; anything else fails | Lightning (job), Fina | P2 |
 | C12 | No dependency adds without approval; explicit versions; permissive licenses | 2 (`cargo deny`) + 3 | 2 | Add CI diff check: if `Cargo.lock` gains a crate, require a matching `decisions.md` line dated in the PR | Lightning | P2 |
 | C13 | No `dbg!`, stdout/stderr printing, no unsafe | 2 (workspace lints) | 2 | Done; trim prose | Y'shtola | P3 |
-| C14 | Build roles never merge; dangerous actions need approval | 3 + 4 | 1 (platform) | GitHub branch protection on `main`: require CI + one approving review; agents' tokens lack merge rights. User decision (Open question 2) | User | P2 |
+| C14 | Build roles never merge; dangerous actions need approval | 3 + 4 | 1 (platform) | GitHub branch protection on `main`: require CI + one approving review; agents' tokens lack merge rights. User decision (Open question 1) | User | P2 |
 | C15 | Fina model rule: high for any non-Markdown change, medium only for Markdown under `.sectorfive/`, `.grok/`, `docs/`, `AGENTS.md` | 3 | 2 | `.sectorfive/bin/role fina` prints the required thinking level for a given PR by reading changed paths (`--pr <n>`) and refuses medium when any non-Markdown file changed | Y'shtola (script, shellcheck in CI) | P2 |
 | C16 | Error messages short and actionable; Neovim wording wins (Tifa brief) | 3 + 4 | 2 (partial) | Screen cases for known failure paths (`edit-lsp-err*`, missing `tsserver` as seen in the F-06 hands-on pass) assert the message fits one line at 80 cols and names a fix | Tifa (copy), Fina (cases) | P2 |
 | C17 | Legibility under `NO_COLOR`/`TERM=dumb`; never meaning by color alone | 3 + 4 | 2 | `cargo xtask screens` gains a no-color mode for picker, wildmenu, diagnostics; assertion that selected/active items differ in text or attributes, not only color | Yuna / Tifa | P2 |
@@ -77,7 +77,7 @@ When a check lands that enforces a rule, the matching prose in `AGENTS.md` / con
 ## 5. Acceptance checks
 
 - A1. Contract and `AGENTS.md` state the ladder (R1); Fina's checklist has the "proposed encoding" item (R2).
-- A2. C1 lands before F-06 is re-verified: the test fails on `main` @ `1726eb7` (reproduces B1) and passes after Yuna's fix, at 80×24 and 40×12.
+- A2. C1 lands in Yuna's standalone F-06 B1 fix PR, before F-06 is re-verified: the test fails on `main` @ `1726eb7` (reproduces B1) and passes after Yuna's fix, at 80×24 and 40×12.
 - A3. Each P0/P1 row is either a merged check or a plan step with an owner in `.sectorfive/plans/`.
 - A4. For each check merged, the matching prose is trimmed in the same PR or the next one (R3), and `AGENTS.md` stays under its current 50 lines.
 - A5. The next three Fina findings after this lands each have a `correction:` line in `decisions.md`.
@@ -88,8 +88,11 @@ When a check lands that enforces a rule, the matching prose in `AGENTS.md` / con
 - Ownership-diff checks (C10) can block legitimate cross-role plans. Warn, don't fail, until the plan format names allowed paths.
 - Over-trimming prose: agents still need the "why". Keep one line per rule pointing at its check.
 
-## 7. Open questions
+## 7. Decisions
 
-1. Should C1 be its own backlog item (F-06 fix) or ride F-35? Proposal: its own fix PR by Yuna, referenced here.
-2. Branch protection on `main` (C14): does the user want required reviews, given plans are pushed directly to `main` today?
-3. Should `cargo xtask arch` / `owners` be one xtask or two? (Lightning's call.)
+- 2026-10-16: User decision: the picker bleed-through fix (F-06 veto B1) ships as its own PR by Yuna, not bundled into F-35. That PR carries C1, the P0 picker screen test; F-35 only references it.
+
+## 8. Open questions
+
+1. Branch protection on `main` (C14): does the user want required reviews, given plans are pushed directly to `main` today?
+2. Should `cargo xtask arch` / `owners` be one xtask or two? (Lightning's call.)
