@@ -30,10 +30,10 @@ pub(super) fn draw_picker(
     };
     let col = width.saturating_sub(w) / 2;
     let row = avail.saturating_sub(h) / 2;
+    // Own the whole row. Clearing only `[col, col+w)` left the side margin as
+    // window cells, so buffer glyphs glued onto the prompt (`liFiles>`).
     for r in 0..h {
-        for x in 0..w {
-            grid.set(col + x, row + r, " ", 1, pmenu);
-        }
+        grid.fill_row(row + r, pmenu);
     }
     let label = match picker.kind {
         PickerKind::Files => "Files> ",
@@ -180,13 +180,15 @@ mod tests {
         picker.set_query("b");
         editor.picker = Some(picker);
         let (grid, cursor) = render(&editor);
-        // Centered over the 9 rows above the command line: prompt + 2 matches
-        // (column 0 keeps the buffer's `~` outside the window).
-        assert_eq!(grid.row_text(3).trim_end(), "~ Files> b");
-        assert_eq!(grid.row_text(4).trim_end(), "~ b.txt");
-        assert_eq!(grid.row_text(5).trim_end(), "~ sub/c.txt");
+        // Centered over the 9 rows above the command line: prompt + 2 matches.
+        // The rows are the picker's across the full width, so column 0 is not
+        // the buffer's `~`.
+        assert_eq!(grid.row_text(3).trim_end(), "  Files> b");
+        assert_eq!(grid.row_text(4).trim_end(), "  b.txt");
+        assert_eq!(grid.row_text(5).trim_end(), "  sub/c.txt");
         assert_eq!(cursor, Some((10, 3)));
         let theme = Theme::new(&editor);
+        assert_eq!(grid.cell(0, 3).style, theme.group("Pmenu"));
         assert_eq!(grid.cell(2, 3).style, theme.group("Pmenu"));
         assert_eq!(
             grid.cell(2, 4).style,
@@ -292,5 +294,95 @@ mod tests {
         let marker_at = cut_row.find("5000+").expect("marker");
         assert!(marker_at >= prompt_at + prompt.len());
         assert!(!full_row.contains("5000+"));
+    }
+
+    /// C1 (F-06 veto B1): `:Files` over a buffer full of text owns its rows.
+    /// Cells outside that band match the window underneath; cells inside are
+    /// the picker's. A margin of buffer glyphs (`liFiles>`, `lia.txt`) fails.
+    #[test]
+    fn files_picker_paints_only_its_box_over_a_full_buffer() {
+        for (width, height) in [(80, 24), (40, 12)] {
+            let mut editor = Editor::new(width, height);
+            let text: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+            editor.set_text(&text);
+            editor.mode = Mode::CmdLine;
+            editor.cmdline_kind = ':';
+
+            let mut underlying = Grid::new(width, height);
+            super::super::draw(&editor, "", &mut underlying);
+
+            editor.picker = Some(Picker::files(
+                ["a.txt", "b.txt", "full.txt", "my doc.txt", "sub/c.txt"]
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect(),
+            ));
+            let mut grid = Grid::new(width, height);
+            super::super::draw(&editor, "", &mut grid);
+
+            let (row, rows) = picker_band(&editor);
+            let theme = Theme::new(&editor);
+            let pmenu = theme.group("Pmenu");
+            let selected = pmenu.combine(theme.group("PmenuSel"));
+            let screen = |g: &Grid| -> String {
+                (0..height)
+                    .map(|y| g.row_text(y).trim_end().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            for y in 0..height {
+                for x in 0..width {
+                    let cell = grid.cell(x, y);
+                    if (row..row + rows).contains(&y) {
+                        assert!(
+                            cell.style == pmenu || cell.style == selected,
+                            "{width}x{height} cell ({x},{y}) is inside the picker box but not the picker's\n{}",
+                            screen(&grid)
+                        );
+                    } else {
+                        let under = underlying.cell(x, y);
+                        assert_eq!(
+                            (cell.symbol.as_str(), cell.style),
+                            (under.symbol.as_str(), under.style),
+                            "{width}x{height} cell ({x},{y}) outside the picker box differs from the window\n{}",
+                            screen(&grid)
+                        );
+                    }
+                }
+                let text = grid.row_text(y);
+                assert!(
+                    !row_bleeds_like_li_files(&text),
+                    "{width}x{height} row {y} looks like `liFiles>`\n{}",
+                    screen(&grid)
+                );
+            }
+            assert!(
+                grid.row_text(row).contains("Files>"),
+                "prompt missing\n{}",
+                screen(&grid)
+            );
+        }
+    }
+
+    /// Rows the picker occupies: prompt plus shown matches, centered above the
+    /// command line. The box is the full width of those rows — a side margin
+    /// left as window cells is the bleed.
+    fn picker_band(editor: &Editor) -> (usize, usize) {
+        let picker = editor.picker.as_ref().expect("picker");
+        let (_, height) = editor.screen_size();
+        let avail = height.saturating_sub(flux_view::CMDLINE_ROWS);
+        let list_rows = picker.shown_count().min(avail.saturating_sub(1));
+        let rows = list_rows + 1;
+        let row = avail.saturating_sub(rows) / 2;
+        (row, rows)
+    }
+
+    /// `liFiles>`, `..Files>`, `.gFiles>`: buffer glyphs glued to the prompt.
+    fn row_bleeds_like_li_files(row: &str) -> bool {
+        let row = row.trim_end();
+        let Some(i) = row.find("Files>") else {
+            return false;
+        };
+        row[..i].chars().any(|c| !c.is_whitespace())
     }
 }
