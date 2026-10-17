@@ -11,7 +11,7 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | F-05 | Name and packaging decision: **✅ decided Oct 5, 2026.** Command, config path and Lua namespace stay `flux`; package name `flux-editor` | crates.io/Homebrew `flux` names are taken; had to settle before the API namespace and config path freeze | S (decision) | — | ★ | ✅ done |
 | F-06 | Stage B verify and sign-off | Pickers and Tab completion shipped without a recorded gate | S | F-01 | ★ | 🚢 #21 |
 | F-07 | Lua runtime + `init.lua` loading + error handling + `flux.opt` (existing options), `flux.cmd`, `flux.version`, `--clean`/`-u`; reserves the whole `flux.*` surface (spec Appendix A) | Foundation of user config; bad config must never crash | M | F-05 (done) | ★ | 📄 |
-| F-08 | Common config options (`scrolloff`, `wrap`, `list`/`listchars`, `cursorline`, `colorcolumn`, `mouse`, `clipboard`, `swapfile`); `flux.opt` itself moved to F-07 | Users' first config lines currently hit E518 | M | F-07 | ★ | after F-07 |
+| F-08 | Common config options (`scrolloff`, `wrap`, `list`/`listchars`, `cursorline`, `colorcolumn`, `mouse`, `clipboard`, `swapfile`); `flux.opt` itself moved to F-07 | Users' first config lines currently hit E518 | M | F-07 | ★ | 📄 specced (draft, Oct 16, 2026; mouse off by default) |
 | F-09 | `flux.map`/`flux.unmap` keymaps (per mode, non-recursive; `flux.g.mapleader`). **May slip to M8** by plan amendment (`.sectorfive/plans/m7.md:138–141`); names reserved in F-07 Appendix A either way | Keymaps are table stakes. Largest design risk in M7 | L | F-07 | ★ | after F-07 |
 | F-10 | `flux.lsp.config`/`flux.lsp.enable` (replaces `$FLUX_LSP_CONFIG` for users; explicit enable feeds F-13's flag) | Users must add or adjust servers without env vars | S–M | F-07 | ★ | after F-07 |
 | F-11 | `:colorscheme` + `:highlight` + `flux.highlight` + one alternate (light-friendly) scheme | Theming is expected; light terminals need a good option | M | F-07 | ★ | after F-07 |
@@ -58,8 +58,8 @@ Deferred follow-ups, not blocking 1.0. Status: deferred = filed for later, not s
 | TD-05 | Show a notice when an LSP server starts | Tifa | F-06 evidence N6 | deferred |
 | TD-06 | Add the `cargo xtask screens` case `picker-files.txt` (`:Files` layout vs Neovim/fzf), left out of the B1 fix | Yuna | F-35 C1, PR #20 | deferred |
 
-**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-04, F-06, F-34 (Oct 7, 2026); F-35 (draft, Oct 16, 2026). F-05 is decided (package `flux-editor`, command `flux`).
+**Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-04, F-06, F-34 (Oct 7, 2026); F-08, F-35 (drafts, Oct 16, 2026). F-05 is decided (package `flux-editor`, command `flux`).
 
-**Next to spec:** F-08, F-10, F-11 and F-09 (F-07's API decisions, including the Appendix A shapes, were settled Oct 6, 2026).
+**Next to spec:** F-10, F-11 and F-09 (F-07's API decisions, including the Appendix A shapes, were settled Oct 6, 2026).
 
 **Stage C split** (per `.sectorfive/plans/m7.md:138–141`): F-07 (runtime, `init.lua`, `flux.opt`/`cmd`/`version`, flags) → F-08 (new options) ∥ F-10 (`flux.lsp`) ∥ F-11 (colors) ∥ F-09 (maps). Each is a separately mergeable PR. F-09 is the one the plan allows to slip to M8; if it slips, record the amendment in `.sectorfive/decisions.md`.

@@ -59,7 +59,7 @@ They live in macOS or Linux terminals. Secondary audience: Rust developers who m
 | 4 | **`CTRL-A`/`CTRL-X`** | **1.0** | Small, frequently used. 1 failing oracle case exists |
 | 5 | **Sentence motions/objects** (`(` `)` `is` `as`) | **1.0** | Small. Prose and comment editing. 1 failing oracle case |
 | 6 | **`R` Replace mode** | **1.0** | Small, expected, cheap |
-| 7 | **Mouse, basic** (click to place cursor and focus window, wheel scroll, drag to select) | **1.0** | Neovim enables mouse by default; strangers will click. Advanced mouse (resize by drag, menus) later |
+| 7 | **Mouse, basic** (click to place cursor and focus window, wheel scroll, drag to select) | **1.0** | Strangers will click. Off by default like Vim (`:set mouse=a` to enable; decided Oct 16, 2026, F-08 D1). Advanced mouse (resize by drag, menus) later |
 | 8 | **LSP auto-completion while typing** | **Post-1.0** (opt-in) | Not Vim/Neovim default behavior. Explicit `CTRL-X CTRL-O` already works. Keeps 1.0 focused |
 
 Also 1.0, because new users hit them right away (verified missing in `crates/flux-vim/src/ex.rs` and the options list):
@@ -154,5 +154,5 @@ Also 1.0, because new users hit them right away (verified missing in `crates/flu
 
 ## 8. Open questions (owner)
 1. **Targets:** Linux arm64 and a static/musl build at 1.0? Minimum macOS version?
-2. **Defaults:** mouse on by default like Neovim (`mouse=nvi`) or off? Confirm LSP auto-completion is post-1.0.
+2. **Defaults:** ~~mouse on by default like Neovim (`mouse=nvi`) or off?~~ **Settled Oct 16, 2026: mouse is off by default (`mouse=`), like Vim.** A documented deviation from Neovim, kept for all of 1.x (spec F-08 D1; behavior in F-20). Still open: confirm LSP auto-completion is post-1.0.
 3. **Process:** must every change go through a PR (M7 A/B went straight to `main`)? Who gives final 1.0 sign-off: you, or Fina's gate? Should the existing Sector 5 "Aerith" role be renamed to avoid confusion with your PM agent?
