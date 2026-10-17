@@ -45,6 +45,19 @@ Source: `plans/flux-1.0-prd.md`. Sizes: S ≈ ≤1 day, M ≈ 2–4 days, L ≈ 
 | P-04 | M6 leftovers: focusable floats, `:clist`/`:colder`, inlay hints, code lenses | Nice-to-haves | M | — | — | post-1.0 |
 | P-05 | Windows support | No evidence of demand; `cfg(unix)` paths | L | — | — | post-1.0 |
 
+## Tech debt
+
+Deferred follow-ups, not blocking 1.0. Status: deferred = filed for later, not scheduled.
+
+| ID | Item | Owner | Source | Status |
+|---|---|---|---|---|
+| TD-01 | Record flux's command-line completion order (options, home paths) as a documented deviation from Neovim, next to the 2026-10-03 alphabetical decision | Y'shtola | F-06 evidence N2 | deferred |
+| TD-02 | Record that directory buffers are left out of `:b`/`:bd` completion and `:Buffers` on purpose | Y'shtola | F-06 evidence N3 | deferred |
+| TD-03 | Record register-name completion after `:reg`/`:put` as intended scope beyond Neovim, not a parity gap | Y'shtola | F-06 evidence N4 | deferred |
+| TD-04 | Record that `TERM=dumb` still gets color, alongside the NO_COLOR decision | Y'shtola | F-06 evidence N5 | deferred |
+| TD-05 | Show a notice when an LSP server starts | Tifa | F-06 evidence N6 | deferred |
+| TD-06 | Add the `cargo xtask screens` case `picker-files.txt` (`:Files` layout vs Neovim/fzf), left out of the B1 fix | Yuna | F-35 C1, PR #20 | deferred |
+
 **Specs written:** F-01, F-02, F-03 (Oct 5, 2026); F-07, F-13, F-23, F-27 (Oct 6, 2026); F-04, F-06, F-34 (Oct 7, 2026); F-35 (draft, Oct 16, 2026). F-05 is decided (package `flux-editor`, command `flux`).
 
 **Next to spec:** F-08, F-10, F-11 and F-09 (F-07's API decisions, including the Appendix A shapes, were settled Oct 6, 2026).
